@@ -89,11 +89,25 @@ int  mw_input_capture_active(void);
  * main_sdl.c's event loop calls this next to its own key_state arrays. */
 void mw_input_set_keyboard(int scancode, int down, int latch);
 
-/* Pure merge, no SDL state: the testable core of mw_input_poll(). */
+/* Touch feeding (player 1 only: on-screen touch controls drive P1, pads cover
+ * P2/P3).  set_touch_action mirrors mw_input_set_keyboard: down=0/1 updates
+ * the held bit for an MW_IN_ACT_* slot, and every down also sets that slot's
+ * one-frame tap latch, so a press+release between two polls still counts.
+ * set_touch_service sets P1's start (0x10) / coin (0x01) contributions with
+ * the same latch rule.  main_sdl.c calls both once per frame from the touch
+ * module's frame state, immediately before mw_input_poll(). */
+void mw_input_set_touch_action(int action, int down);
+void mw_input_set_touch_service(int start, int coin);
+
+/* Pure merge, no SDL state: the testable core of mw_input_poll().  The touch
+ * arguments are player 1's contribution from the touch feed; they are masked
+ * to P1's own service bits exactly like the pad contributions are. */
 void mw_input_merge_for_test(const uint8_t key_bits[MW_IN_PLAYERS],
                              const uint8_t pad_bits[MW_IN_PLAYERS],
                              const uint8_t pad_start[MW_IN_PLAYERS],
                              const uint8_t pad_coin[MW_IN_PLAYERS],
+                             uint8_t touch_bits, uint8_t touch_start,
+                             uint8_t touch_coin,
                              mw_input_result *out);
 
 #ifdef __cplusplus

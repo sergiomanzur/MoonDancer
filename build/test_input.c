@@ -11,6 +11,8 @@
  * keyboard feed; section (g) attaches SDL virtual gamepads (when no physical
  * controller is present) to exercise the pad path, Start/Back service bits,
  * the left stick, and a real SDL_CONTROLLERDEVICEREMOVED hot-unplug.
+ * Section (i) feeds the touch API through the same merge: P1-only action and
+ * service bits, held + one-frame latch semantics.
  * Run it with build\SDL2.dll on PATH or in the working directory.
  */
 #define SDL_MAIN_HANDLED
@@ -66,7 +68,7 @@ int main(void)
     key[0] = (uint8_t)(MW_IN_UP | MW_IN_B1);
     key[1] = MW_IN_LEFT;
     key[2] = (uint8_t)(MW_IN_DOWN | MW_IN_B2);
-    mw_input_merge_for_test(key, pad, pstart, pcoin, &r);
+    mw_input_merge_for_test(key, pad, pstart, pcoin, 0, 0, 0, &r);
     check_int("a p1 actions", r.actions[0], MW_IN_UP | MW_IN_B1);
     check_int("a p2 actions", r.actions[1], MW_IN_LEFT);
     check_int("a p3 actions", r.actions[2], MW_IN_DOWN | MW_IN_B2);
@@ -86,7 +88,7 @@ int main(void)
     memset(&r, 0xAA, sizeof(r));
     key[1] = MW_IN_LEFT;
     pad[1] = (uint8_t)(MW_IN_RIGHT | MW_IN_B3);
-    mw_input_merge_for_test(key, pad, pstart, pcoin, &r);
+    mw_input_merge_for_test(key, pad, pstart, pcoin, 0, 0, 0, &r);
     check_int("b p2 actions", r.actions[1], MW_IN_LEFT | MW_IN_RIGHT | MW_IN_B3);
     check_int("b p1 actions untouched", r.actions[0], 0);
     check_int("b p3 actions untouched", r.actions[2], 0);
@@ -104,7 +106,7 @@ int main(void)
     pad[2] = MW_IN_B1;
     /* A naive P3 coin mapping would feed the shared 0x80 bit here. */
     pcoin[2] = 0x80;
-    mw_input_merge_for_test(key, pad, pstart, pcoin, &r);
+    mw_input_merge_for_test(key, pad, pstart, pcoin, 0, 0, 0, &r);
     check_int("c p3 actions", r.actions[2], MW_IN_UP | MW_IN_B1);
     check_int("c p3 coin", r.coin[2], 0);
     check_int("c p3 start", r.start[2], 0);
@@ -123,7 +125,7 @@ int main(void)
     memset(&r, 0xAA, sizeof(r));
     pstart[2] = 0x80;
     pcoin[2] = 0x80; /* Start+Back both held must still yield one 0x80 */
-    mw_input_merge_for_test(key, pad, pstart, pcoin, &r);
+    mw_input_merge_for_test(key, pad, pstart, pcoin, 0, 0, 0, &r);
     check_int("d p3 start", r.start[2], 0x80);
     check_int("d p3 coin", r.coin[2], 0);
     check_int("d p3 start/coin disjoint", r.start[2] & r.coin[2], 0);
@@ -149,7 +151,7 @@ int main(void)
     pad[0] = (uint8_t)(MW_IN_DOWN | MW_IN_B2);
     pstart[0] = 0x10;
     pcoin[0] = 0x01;
-    mw_input_merge_for_test(key, pad, pstart, pcoin, &r);
+    mw_input_merge_for_test(key, pad, pstart, pcoin, 0, 0, 0, &r);
     check_int("e merged p1 actions", r.actions[0],
               MW_IN_UP | MW_IN_DOWN | MW_IN_B1 | MW_IN_B2);
     check_int("e p1 start", r.start[0], 0x10);
@@ -158,7 +160,7 @@ int main(void)
     memset(pad, 0, sizeof(pad));
     memset(pstart, 0, sizeof(pstart));
     memset(pcoin, 0, sizeof(pcoin));
-    mw_input_merge_for_test(key, pad, pstart, pcoin, &r);
+    mw_input_merge_for_test(key, pad, pstart, pcoin, 0, 0, 0, &r);
     check_int("e p1 actions after unplug", r.actions[0], MW_IN_UP | MW_IN_B1);
     check_int("e p1 start after unplug", r.start[0], 0);
     check_int("e p1 coin after unplug", r.coin[0], 0);
@@ -313,7 +315,10 @@ int main(void)
             SDL_Event ce;
             memset(&ce, 0, sizeof(ce));
             ce.type = SDL_CONTROLLERBUTTONDOWN;
-            ce.cbutton.which = 0;
+            /* The module's source guard accepts a capture only from the pad
+             * already bound to that player, so the synthetic event must carry
+             * that pad's instance id (not a bare 0). */
+            ce.cbutton.which = SDL_JoystickInstanceID(jh[1]);
             ce.cbutton.button = SDL_CONTROLLER_BUTTON_Y;
             mw_input_process_event(&ce);
         }
@@ -438,6 +443,83 @@ int main(void)
 
         mw_input_begin_capture(-1, MW_IN_ACT_B1, 0); /* disarm */
         check_int("h idle result", mw_input_capture_result(&code), 0);
+    }
+
+    /* ---- (i) touch feeding (P1 only, same merge as keyboard/pads) ----- */
+    printf("-- (i) touch feeding --\n");
+    {
+        mw_settings s;
+        uint8_t k0[3] = { 0, 0, 0 };
+        uint8_t p0[3] = { 0, 0, 0 };
+
+        mw_settings_defaults(&s);
+        mw_input_load_maps(&s);
+
+        /* Pure merge: touch is P1's third source and masks to P1's service
+         * bits, so a stray P2 coin bit can never ride in through it. */
+        memset(&r, 0xAA, sizeof(r));
+        mw_input_merge_for_test(k0, p0, p0, p0, 0xFF, 0xFF, 0xFF, &r);
+        check_int("i merge touch actions p1", r.actions[0], 0xFF);
+        check_int("i merge touch actions p2", r.actions[1], 0);
+        check_int("i merge touch actions p3", r.actions[2], 0);
+        check_int("i merge touch start p1", r.start[0], 0x10);
+        check_int("i merge touch coin p1", r.coin[0], 0x01);
+        check_int("i merge touch start p2", r.start[1], 0);
+        check_int("i merge touch coin p2", r.coin[1], 0);
+
+        /* 0x02 is player 2's coin bit; touch can never carry it. */
+        memset(&r, 0xAA, sizeof(r));
+        mw_input_merge_for_test(k0, p0, p0, p0, 0, 0, 0x02, &r);
+        check_int("i merge drops stray p2 coin", r.coin[0] | r.coin[1], 0);
+
+        /* Held action bits OR with the keyboard and stay P1-only. */
+        mw_input_poll(&r);
+        check_int("i idle", r.actions[0] | r.actions[1] | r.actions[2], 0);
+        mw_input_set_touch_action(MW_IN_ACT_UP, 1);
+        mw_input_set_touch_action(MW_IN_ACT_B3, 1);
+        mw_input_poll(&r);
+        check_int("i p1 touch UP|B3", r.actions[0], MW_IN_UP | MW_IN_B3);
+        check_int("i p2 untouched", r.actions[1], 0);
+        check_int("i p3 untouched", r.actions[2], 0);
+
+        mw_input_set_keyboard(SDL_SCANCODE_LEFT, 1, 1);
+        mw_input_poll(&r);
+        check_int("i keyboard OR touch", r.actions[0],
+                  MW_IN_UP | MW_IN_B3 | MW_IN_LEFT);
+        mw_input_set_keyboard(SDL_SCANCODE_LEFT, 0, 0);
+        mw_input_poll(&r);
+
+        /* Service contributes P1's start (0x10) / coin (0x01) bits. */
+        mw_input_set_touch_service(1, 1);
+        mw_input_poll(&r);
+        check_int("i p1 touch start", r.start[0], 0x10);
+        check_int("i p1 touch coin", r.coin[0], 0x01);
+        check_int("i p2 touch service", r.start[1] | r.coin[1], 0);
+        check_int("i p3 touch service", r.start[2] | r.coin[2], 0);
+        mw_input_set_touch_service(0, 0);
+        mw_input_poll(&r);
+        check_int("i service release", r.start[0] | r.coin[0], 0);
+        check_int("i held actions survive", r.actions[0],
+                  MW_IN_UP | MW_IN_B3);
+        mw_input_set_touch_action(MW_IN_ACT_UP, 0);
+        mw_input_set_touch_action(MW_IN_ACT_B3, 0);
+        mw_input_poll(&r);
+        check_int("i actions release", r.actions[0], 0);
+
+        /* A tap that ends before the poll still counts for one frame. */
+        mw_input_set_touch_action(MW_IN_ACT_B1, 1);
+        mw_input_set_touch_action(MW_IN_ACT_B1, 0);
+        mw_input_poll(&r);
+        check_int("i tap latch", r.actions[0], MW_IN_B1);
+        mw_input_poll(&r);
+        check_int("i tap latch drains", r.actions[0], 0);
+
+        mw_input_set_touch_service(1, 0);
+        mw_input_set_touch_service(0, 0);
+        mw_input_poll(&r);
+        check_int("i service tap latch", r.start[0], 0x10);
+        mw_input_poll(&r);
+        check_int("i service tap latch drains", r.start[0], 0);
     }
 
     if (g_failures) {

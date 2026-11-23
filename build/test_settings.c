@@ -101,6 +101,8 @@ int main(void)
         check_int("scanline_intensity", s.scanline_intensity, 50);
         check_int("window_w", s.window_w, 1280);
         check_int("window_h", s.window_h, 720);
+        check_int("touch_on", s.touch_on, 1);
+        check_int("touch_mode", s.touch_mode, 1);
 
         {
             const int p1[7] = { SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_LEFT,
@@ -166,6 +168,8 @@ int main(void)
         a.scanline_intensity = 77;
         a.window_w = 1920;
         a.window_h = 1080;
+        a.touch_on = 0;
+        a.touch_mode = 0;
         for (p = 0; p < 7; p++) {
             a.key_map[0][p] = kp1[p];
             a.key_map[1][p] = kp2[p];
@@ -193,6 +197,8 @@ int main(void)
                 check_int("rt scanline_intensity", b.scanline_intensity, 77);
                 check_int("rt window_w", b.window_w, 1920);
                 check_int("rt window_h", b.window_h, 1080);
+                check_int("rt touch_on", b.touch_on, 0);
+                check_int("rt touch_mode", b.touch_mode, 0);
                 check_key_map("rt", &b, 0, kp1);
                 check_key_map("rt", &b, 1, kp2);
                 check_key_map("rt", &b, 2, kp3);
@@ -255,6 +261,8 @@ int main(void)
                 check_int("legacy scanline_intensity", s.scanline_intensity, 50);
                 check_int("legacy window_w", s.window_w, 1280);
                 check_int("legacy window_h", s.window_h, 720);
+                check_int("legacy touch_on", s.touch_on, 1);
+                check_int("legacy touch_mode", s.touch_mode, 1);
                 check_key_map("legacy", &s, 0, p1);
                 check_key_map("legacy", &s, 1, p2);
                 check_key_map("legacy", &s, 2, p3);
@@ -279,11 +287,15 @@ int main(void)
         printf("-- (d) clamping --\n");
         if (write_file(clamp_path,
                        "shader_preset=9\n"
-                       "scanline_intensity=500\n")) {
+                       "scanline_intensity=500\n"
+                       "touch_on=7\n"
+                       "touch_mode=9\n")) {
             mw_settings_defaults(&s);
             if (mw_settings_load(&s, clamp_path)) {
                 check_int("clamp shader_preset", s.shader_preset, 2);
                 check_int("clamp scanline_intensity", s.scanline_intensity, 100);
+                check_int("clamp touch_on", s.touch_on, 1);
+                check_int("clamp touch_mode", s.touch_mode, 1);
             } else {
                 printf("[FAIL] load of clamp file %s failed\n", clamp_path);
                 g_failures++;
@@ -291,11 +303,15 @@ int main(void)
         }
         if (write_file(clamp_path,
                        "shader_preset=-4\n"
-                       "scanline_intensity=-9\n")) {
+                       "scanline_intensity=-9\n"
+                       "touch_on=0\n"
+                       "touch_mode=-5\n")) {
             mw_settings_defaults(&s);
             if (mw_settings_load(&s, clamp_path)) {
                 check_int("clamp low shader_preset", s.shader_preset, 0);
                 check_int("clamp low scanline_intensity", s.scanline_intensity, 0);
+                check_int("clamp low touch_on", s.touch_on, 0);
+                check_int("clamp low touch_mode", s.touch_mode, 0);
             } else {
                 printf("[FAIL] load of low-clamp file %s failed\n", clamp_path);
                 g_failures++;

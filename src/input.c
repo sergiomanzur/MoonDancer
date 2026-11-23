@@ -37,6 +37,12 @@ static struct {
     int player_slot[MW_IN_PLAYERS];          /* player -> slot, -1 = keyboard */
     uint8_t key_state[SDL_NUM_SCANCODES];
     uint8_t key_latch[SDL_NUM_SCANCODES];
+    /* Touch is a third source for player 1 only.  Held state plus a one-frame
+     * tap latch, mirroring key_state/key_latch. */
+    uint8_t touch_state[MW_IN_ACTIONS];
+    uint8_t touch_latch[MW_IN_ACTIONS];
+    uint8_t touch_start_held, touch_coin_held;   /* P1 service, held */
+    uint8_t touch_start_latch, touch_coin_latch; /* P1 service, one frame */
     /* rebinding capture */
     int capture_state;                       /* 0 idle, 1 waiting, 2 done */
     int capture_player;
@@ -176,6 +182,10 @@ void mw_input_init(void)
 
     memset(g_in.key_state, 0, sizeof(g_in.key_state));
     memset(g_in.key_latch, 0, sizeof(g_in.key_latch));
+    memset(g_in.touch_state, 0, sizeof(g_in.touch_state));
+    memset(g_in.touch_latch, 0, sizeof(g_in.touch_latch));
+    g_in.touch_start_held = g_in.touch_coin_held = 0;
+    g_in.touch_start_latch = g_in.touch_coin_latch = 0;
     memset(g_in.pads, 0, sizeof(g_in.pads));
     memset(g_in.player_slot, 0xFF, sizeof(g_in.player_slot));
     g_in.slots = 0;
@@ -203,6 +213,10 @@ void mw_input_shutdown(void)
     memset(g_in.player_slot, 0xFF, sizeof(g_in.player_slot));
     memset(g_in.key_state, 0, sizeof(g_in.key_state));
     memset(g_in.key_latch, 0, sizeof(g_in.key_latch));
+    memset(g_in.touch_state, 0, sizeof(g_in.touch_state));
+    memset(g_in.touch_latch, 0, sizeof(g_in.touch_latch));
+    g_in.touch_start_held = g_in.touch_coin_held = 0;
+    g_in.touch_start_latch = g_in.touch_coin_latch = 0;
     g_in.capture_state = 0;
     g_in.maps_loaded = 0; /* next init/poll re-seeds the defaults */
 }
@@ -274,6 +288,23 @@ void mw_input_set_keyboard(int scancode, int down, int latch)
     if (latch) g_in.key_latch[scancode] = 1;
 }
 
+void mw_input_set_touch_action(int action, int down)
+{
+    if (action < 0 || action >= MW_IN_ACTIONS) return;
+    g_in.touch_state[action] = down ? 1 : 0;
+    if (down) g_in.touch_latch[action] = 1;
+}
+
+void mw_input_set_touch_service(int start, int coin)
+{
+    /* Only P1's own service bits; the merge masks again, so an accidental
+     * P2/P3 bit can never escape this feed. */
+    g_in.touch_start_held = start ? k_pad_start_bit[0] : 0;
+    g_in.touch_coin_held = coin ? k_pad_coin_bit[0] : 0;
+    if (start) g_in.touch_start_latch = k_pad_start_bit[0];
+    if (coin) g_in.touch_coin_latch = k_pad_coin_bit[0];
+}
+
 /* ------------------------------------------------------------------ */
 /* merge                                                               */
 /* ------------------------------------------------------------------ */
@@ -282,6 +313,8 @@ void mw_input_merge_for_test(const uint8_t key_bits[MW_IN_PLAYERS],
                              const uint8_t pad_bits[MW_IN_PLAYERS],
                              const uint8_t pad_start[MW_IN_PLAYERS],
                              const uint8_t pad_coin[MW_IN_PLAYERS],
+                             uint8_t touch_bits, uint8_t touch_start,
+                             uint8_t touch_coin,
                              mw_input_result *out)
 {
     int p;
@@ -298,6 +331,12 @@ void mw_input_merge_for_test(const uint8_t key_bits[MW_IN_PLAYERS],
         out->coin[p] = (uint8_t)((pad_coin ? pad_coin[p] : 0) &
                                  k_pad_coin_bit[p]);
     }
+    /* Touch is player 1's third source; mask its service contribution to
+     * P1's own bits so it cannot impersonate another player. */
+    out->actions[0] = (uint8_t)(out->actions[0] | touch_bits);
+    out->start[0] = (uint8_t)(out->start[0] |
+                              (touch_start & k_pad_start_bit[0]));
+    out->coin[0] = (uint8_t)(out->coin[0] | (touch_coin & k_pad_coin_bit[0]));
 }
 
 void mw_input_poll(mw_input_result *out)
@@ -356,8 +395,25 @@ void mw_input_poll(mw_input_result *out)
             pad_coin[p] |= k_pad_coin_bit[p];
     }
 
-    mw_input_merge_for_test(key_bits, pad_bits, pad_start, pad_coin, out);
+    /* Touch (player 1): held bit OR the one-frame tap latch, the same rule as
+     * the keyboard.  Service latches are drained with the key latch below. */
+    {
+        uint8_t touch_bits = 0;
+        uint8_t touch_start = (uint8_t)(g_in.touch_start_held |
+                                        g_in.touch_start_latch);
+        uint8_t touch_coin = (uint8_t)(g_in.touch_coin_held |
+                                       g_in.touch_coin_latch);
+        for (a = 0; a < MW_IN_ACTIONS; a++) {
+            if (g_in.touch_state[a] || g_in.touch_latch[a])
+                touch_bits |= k_action_bit[a];
+        }
+        mw_input_merge_for_test(key_bits, pad_bits, pad_start, pad_coin,
+                                touch_bits, touch_start, touch_coin, out);
+    }
     memset(g_in.key_latch, 0, sizeof(g_in.key_latch));
+    memset(g_in.touch_latch, 0, sizeof(g_in.touch_latch));
+    g_in.touch_start_latch = 0;
+    g_in.touch_coin_latch = 0;
 }
 
 /* ------------------------------------------------------------------ */

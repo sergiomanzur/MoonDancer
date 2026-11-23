@@ -40,6 +40,8 @@ void mw_settings_defaults(mw_settings *s)
     s->scanline_intensity = 50;
     s->window_w = 1280;
     s->window_h = 720;
+    s->touch_on = 1;
+    s->touch_mode = 1; /* MW_TOUCH_STICK: the native-Android convention */
     for (p = 0; p < MW_PLAYERS; p++) {
         for (a = 0; a < MW_ACTIONS; a++) {
             s->key_map[p][a] = k_default_key_map[p][a];
@@ -161,6 +163,8 @@ int mw_settings_load(mw_settings *s, const char *path)
         else if (!strcmp(key, "scanline_intensity")) s->scanline_intensity = clampi(value, 0, 100);
         else if (!strcmp(key, "window_w")) s->window_w = value;
         else if (!strcmp(key, "window_h")) s->window_h = value;
+        else if (!strcmp(key, "touch_on")) s->touch_on = value ? 1 : 0;
+        else if (!strcmp(key, "touch_mode")) s->touch_mode = clampi(value, 0, 1);
         else if (!strncmp(key, "key_map_p", 9)) {
             int player = key[9] - '0';
             int map[MW_ACTIONS];
@@ -195,6 +199,8 @@ int mw_settings_save(const mw_settings *s, const char *path)
     fprintf(f, "sound_on=%d\nmusic_on=%d\nshader_preset=%d\nscanline_intensity=%d\nwindow_w=%d\nwindow_h=%d\n",
             s->sound_on ? 1 : 0, s->music_on ? 1 : 0, clampi(s->shader_preset, 0, 2),
             clampi(s->scanline_intensity, 0, 100), s->window_w, s->window_h);
+    fprintf(f, "touch_on=%d\ntouch_mode=%d\n",
+            s->touch_on ? 1 : 0, clampi(s->touch_mode, 0, 1));
     for (p = 0; p < MW_PLAYERS; p++) {
         fprintf(f, "key_map_p%d=", p);
         for (a = 0; a < MW_ACTIONS; a++) fprintf(f, "%s%d", a ? "," : "", s->key_map[p][a]);

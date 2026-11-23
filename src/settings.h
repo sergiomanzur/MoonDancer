@@ -28,6 +28,8 @@ typedef struct mw_settings {
     int scanline_intensity; /* 0..100, default 50 */
     int window_w;           /* default 1280, 0 = use the preset list */
     int window_h;           /* default 720,  0 = use the preset list */
+    int touch_on;           /* 0/1, default 1; on-screen controls, MENU stays */
+    int touch_mode;         /* MW_TOUCH_DPAD / MW_TOUCH_STICK, default STICK */
     int key_map[3][7];      /* SDL_Scancode per player, actions:
                                [0]=UP [1]=DOWN [2]=LEFT [3]=RIGHT
                                [4]=B1 [5]=B2 [6]=B3 */

@@ -110,6 +110,7 @@ if(MW_BUILD_SDL)
         add_executable(mwalk
             src/main_sdl.c
             src/input.c
+            src/touch_controls.c
             src/host_port.c
             src/zip_loader.c
             third_party/miniz/miniz.c

@@ -25,6 +25,7 @@
 #include "settings.h"
 #include "host_port.h"
 #include "input.h"
+#include "touch_controls.h"
 #include "ui.h"
 #include "zip_loader.h"
 #ifdef _WIN32
@@ -45,6 +46,7 @@
 static uint8_t key_state[SDL_NUM_SCANCODES];
 static uint8_t key_latch[SDL_NUM_SCANCODES];
 static mw_input_result g_input; /* keyboard + 3 pads, refreshed every frame */
+static mw_touch_state g_touch;  /* on-screen controls for P1, per frame */
 static int g_demo;
 static uint8_t g_dsw = 0xFD;
 static s18_audio_t *g_sdl_audio;
@@ -535,6 +537,8 @@ int mw_game_main(int argc, char **argv)
     int applied_audio = audio_on;
     int applied_window_w = g_settings.window_w;
     int applied_window_h = g_settings.window_h;
+    int applied_touch_on = -1;   /* -1 forces the first mw_touch_set() */
+    int applied_touch_mode = -1;
     Uint32 last_save = 0;
     double fps = 60.0;
     Uint64 fps_last = SDL_GetPerformanceCounter();
@@ -607,10 +611,42 @@ int mw_game_main(int argc, char **argv)
                 key_state[event.key.keysym.scancode] = 0;
                 mw_input_set_keyboard(event.key.keysym.scancode, 0, 0);
                 break;
+            case SDL_FINGERDOWN:
+            case SDL_FINGERMOTION:
+                /* SDL normalizes the window coordinates to [0,1]; the touch
+                 * module's geometry uses the same space.  Desktop Windows
+                 * sends no finger events, so this path stays dormant there. */
+                mw_touch_finger(1, event.tfinger.x, event.tfinger.y,
+                                (int)event.tfinger.fingerId, &g_touch);
+                break;
+            case SDL_FINGERUP:
+                mw_touch_finger(0, event.tfinger.x, event.tfinger.y,
+                                (int)event.tfinger.fingerId, &g_touch);
+                break;
             default:
                 break;
             }
         }
+
+        /* On-screen touch (P1).  mw_touch_set() forgets fingers in progress,
+         * so only apply a real configuration change; then drain this frame's
+         * latches and feed the bits through the same merge as keyboard/pads.
+         * The MENU button's latch is consumed by the overlay wiring. */
+        if (g_settings.touch_on != applied_touch_on ||
+            g_settings.touch_mode != applied_touch_mode) {
+            mw_touch_set(g_settings.touch_on, g_settings.touch_mode);
+            applied_touch_on = g_settings.touch_on;
+            applied_touch_mode = g_settings.touch_mode;
+        }
+        mw_touch_frame(&g_touch);
+        mw_input_set_touch_action(MW_IN_ACT_UP, (g_touch.actions & MW_IN_UP) != 0);
+        mw_input_set_touch_action(MW_IN_ACT_DOWN, (g_touch.actions & MW_IN_DOWN) != 0);
+        mw_input_set_touch_action(MW_IN_ACT_LEFT, (g_touch.actions & MW_IN_LEFT) != 0);
+        mw_input_set_touch_action(MW_IN_ACT_RIGHT, (g_touch.actions & MW_IN_RIGHT) != 0);
+        mw_input_set_touch_action(MW_IN_ACT_B1, (g_touch.actions & MW_IN_B1) != 0);
+        mw_input_set_touch_action(MW_IN_ACT_B2, (g_touch.actions & MW_IN_B2) != 0);
+        mw_input_set_touch_action(MW_IN_ACT_B3, (g_touch.actions & MW_IN_B3) != 0);
+        mw_input_set_touch_service(g_touch.start, g_touch.coin);
 
         /* Refresh the merged keyboard + pad state once per frame, even while
          * paused or in the panel, so the one-frame tap latch drains and no
