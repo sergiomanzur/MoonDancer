@@ -13,6 +13,9 @@
  *   nav    <ini>   gamepad navigation: the pad walks the launcher card and the
  *                  overlay with no mouse event, and the mouse still behaves
  *                  exactly as before
+ *   sliders <ini>  pad-adjustable percent rows: a nav-focused MASTER VOLUME row
+ *                  steps by 5 on D-pad / L-stick LEFT-RIGHT (with hold-repeat),
+ *                  keeps nav focus, ignores A, and the mouse drag stays as-is
  *   browse <ini>   in-UI archive browser: a real fixture tree on disk is
  *                  listed, directories enter, ".." walks back out, .zip files
  *                  and the current folder are selectable, other files are not,
@@ -61,6 +64,7 @@
 #endif
 
 #include "imgui.h"
+#include "imgui_internal.h" /* throwaway harness: reads NavId to assert focus */
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 
@@ -185,6 +189,20 @@ static void click(int x, int y)
     io.AddMousePosEvent((float)x, (float)y);
     pump();
     io.AddMouseButtonEvent(0, true);
+    pump();
+    io.AddMouseButtonEvent(0, false);
+    pump();
+}
+
+/* Press, move while held, release: the real drag shape the percent rows use. */
+static void drag(int x0, int y, int x1)
+{
+    ImGuiIO &io = ImGui::GetIO();
+    io.AddMousePosEvent((float)x0, (float)y);
+    pump();
+    io.AddMouseButtonEvent(0, true);
+    pump();
+    io.AddMousePosEvent((float)x1, (float)y);
     pump();
     io.AddMouseButtonEvent(0, false);
     pump();
@@ -623,6 +641,101 @@ static void run_nav(void)
     shot("n4_mouse");
 }
 
+/* ---- pad-adjustable percent rows (Task 4b) ----
+ * SETTINGS geometry at 1280x720 (s = 1): panel (250,10), px/py (288,38), so the
+ * MASTER VOLUME row starts at (288,168) and its 704-px track sits at y=199.
+ * x=640 is 50%, x=358 is 10%. */
+static ImGuiID nav_id(void)
+{
+    return ImGui::GetCurrentContext()->NavId;
+}
+
+/* SDL2 feeds the analog stick as a key event with a value; |v| > threshold
+ * reads as one press of GamepadLStick*, which is all the row consumes. */
+static void stick_tap(ImGuiKey key)
+{
+    ImGuiIO &io = ImGui::GetIO();
+    io.AddKeyAnalogEvent(key, true, 1.0f);
+    pump();
+    io.AddKeyAnalogEvent(key, false, 0.0f);
+    pump();
+}
+
+static void run_sliders(void)
+{
+    ImGuiID vol_id;
+    int v0;
+
+    g_st.volume = 40;
+    g_pad_capability = 1;
+    pump();
+
+    /* Fresh panel: one D-pad press both initialises nav (on the SETTINGS chip)
+     * and applies the move, so it walks straight down to MASTER VOLUME. */
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    vol_id = nav_id();
+    printf("nav id after one Down: 0x%08X\n", (unsigned)vol_id);
+    check(vol_id != 0, "the D-pad focuses the MASTER VOLUME row");
+    check(g_st.volume == 40, "focus alone does not move the volume");
+    shot("s0_focus");
+
+    /* A on the row stays a no-op: percent_row has no click predicate. */
+    pad_tap(SDL_CONTROLLER_BUTTON_A);
+    check(g_st.volume == 40, "nav activation leaves the volume alone");
+    check(nav_id() == vol_id, "nav activation leaves focus on the row");
+
+    v0 = g_st.volume;
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+    check(g_st.volume == v0 + 5, "D-pad RIGHT adds one 5% step");
+    check(nav_id() == vol_id, "focus stays put while D-pad RIGHT adjusts");
+
+    v0 = g_st.volume;
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+    check(g_st.volume == v0 - 5, "D-pad LEFT subtracts one 5% step");
+    check(nav_id() == vol_id, "focus stays put while D-pad LEFT adjusts");
+    shot("s1_adjusted");
+
+    v0 = g_st.volume;
+    stick_tap(ImGuiKey_GamepadLStickRight);
+    check(g_st.volume == v0 + 5, "L-stick RIGHT adds one 5% step");
+    check(nav_id() == vol_id, "focus stays put while the stick adjusts");
+
+    v0 = g_st.volume;
+    stick_tap(ImGuiKey_GamepadLStickLeft);
+    check(g_st.volume == v0 - 5, "L-stick LEFT subtracts one 5% step");
+
+    /* Hold: ImGui's own typematic (io.KeyRepeatDelay/Rate) repeats the step. */
+    v0 = g_st.volume;
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_GamepadDpadRight, true);
+    for (int i = 0; i < 30; i++) pump();
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_GamepadDpadRight, false);
+    pump();
+    printf("held D-pad RIGHT: %d -> %d\n", v0, g_st.volume);
+    check(g_st.volume >= v0 + 10, "a held D-pad repeats the step");
+    check(nav_id() == vol_id, "focus stays put through the repeat");
+
+    /* Focus off the row: the SOUND toggle below must not inherit the nudge. */
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    check(nav_id() != vol_id, "D-pad DOWN walks off the volume row");
+    v0 = g_st.volume;
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+    check(g_st.volume == v0, "an unfocused percent row ignores D-pad RIGHT");
+
+    /* Mouse parity: the drag path is untouched, and a mouse session can never
+     * fire a step (the pad path is gated on io.NavVisible, and SetFocusID on a
+     * mouse press clears NavCursorVisible). */
+    g_st.volume = 40;
+    click(640, 199);
+    printf("nav id after mouse click: 0x%08X\n", (unsigned)nav_id());
+    check(g_st.volume == 50, "mouse click at 50% sets the volume to 50");
+    check(nav_id() == vol_id, "the mouse focuses the same row the pad focused");
+    check(!ImGui::GetIO().NavVisible, "a mouse click leaves nav invisible (the step gate)");
+    drag(640, 199, 358);
+    check(g_st.volume == 10, "mouse drag still tracks the pointer (10%)");
+    check(nav_id() == vol_id, "the drag keeps focus on the row");
+    shot("s2_mouse");
+}
+
 /* ---- in-UI archive browser (Task 5) ----
  * Fixture geometry mirrors mw_ui_file_browser at DisplaySize 1280x720 (s = 1):
  * panel (220,30) 840x660, px/py 258/58, list at y 200 with 38-px rows. */
@@ -876,6 +989,8 @@ int main(int argc, char **argv)
         run_nav();
     else if (!strcmp(mode, "browse"))
         run_browse();
+    else if (!strcmp(mode, "sliders"))
+        run_sliders();
     else
         run_panel();
 

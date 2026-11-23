@@ -4,6 +4,7 @@
 #include "input.h"
 
 #include "imgui.h"
+#include "imgui_internal.h" /* SetKeyOwner / flagged IsKeyPressed for the pad sliders */
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
 
@@ -333,13 +334,16 @@ bool display_mode_row(mw_ui *ui, mw_settings *settings, ImVec2 pos, float width,
     return changed_now;
 }
 
-/* Shared 0..100% slider row (volume, scanline intensity). */
+/* Shared 0..100% slider row (volume, scanline intensity).  The mouse drags the
+ * handle; a nav-focused row also steps by k_percent_step on pad LEFT/RIGHT. */
 bool percent_row(mw_ui *ui, const char *id, const char *label, int *value,
                  ImVec2 pos, float width, float s, int *changed)
 {
+    static const int k_percent_step = 5; /* matches the rows' visual granularity */
     if (!value) return false;
     ImGui::SetCursorScreenPos(pos);
     ImGui::InvisibleButton(id, ImVec2(width, 52.0f * s), ImGuiButtonFlags_EnableNav);
+    const ImGuiID row_id = ImGui::GetItemID();
     bool hovered = item_hot();
     bool active = ImGui::IsItemActive();
     /* A pad cannot drag the handle, and nav activation also sets the active id,
@@ -347,6 +351,40 @@ bool percent_row(mw_ui *ui, const char *id, const char *label, int *value,
      * focused slider would snap it to wherever the mouse happens to rest. */
     bool dragging = active && ImGui::IsMouseDown(ImGuiMouseButton_Left);
     ImDrawList *dl = ImGui::GetWindowDrawList();
+    bool changed_now = false;
+
+    /* Pad adjustment: while nav has this row focused, D-pad or left-stick
+     * LEFT/RIGHT nudges the percent by one step.  The four keys are routed to
+     * this row's item id for the duration, so ImGui's nav system does not also
+     * read them as focus movement (NavUpdate polls them with
+     * ImGuiKeyOwner_NoOwner, which rejects an owned key).  IsItemFocused() alone
+     * is not enough: a mouse click focuses the row too, so the path is also
+     * gated on io.NavVisible exactly like item_hot()'s focus glow, and a pure
+     * mouse session can never take a step.  Repeat is ImGui's own typematic
+     * (io.KeyRepeatDelay/Rate through ImGuiInputFlags_Repeat), not hand-rolled.
+     * Nav activation is deliberately not handled: the row is drag-only. */
+    if (ImGui::IsItemFocused() && ImGui::GetIO().NavVisible) {
+        ImGui::SetKeyOwner(ImGuiKey_GamepadDpadLeft, row_id);
+        ImGui::SetKeyOwner(ImGuiKey_GamepadDpadRight, row_id);
+        ImGui::SetKeyOwner(ImGuiKey_GamepadLStickLeft, row_id);
+        ImGui::SetKeyOwner(ImGuiKey_GamepadLStickRight, row_id);
+        int dir = 0;
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight, ImGuiInputFlags_Repeat, row_id) ||
+            ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight, ImGuiInputFlags_Repeat, row_id))
+            dir += 1;
+        if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft, ImGuiInputFlags_Repeat, row_id) ||
+            ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft, ImGuiInputFlags_Repeat, row_id))
+            dir -= 1;
+        if (dir) {
+            int nv = *value + dir * k_percent_step;
+            nv = std::max(0, std::min(100, nv));
+            if (nv != *value) {
+                *value = nv;
+                changed_now = true;
+                if (changed) *changed = 1;
+            }
+        }
+    }
 
     int shown = *value;
     if (shown < 0) shown = 0;
@@ -375,7 +413,6 @@ bool percent_row(mw_ui *ui, const char *id, const char *label, int *value,
     dl->AddCircleFilled(ImVec2(kx, track.y + th * 0.5f), kr,
                         active ? IM_COL32(235, 255, 255, 255) : IM_COL32(190, 243, 255, 255));
 
-    bool changed_now = false;
     if (dragging) {
         float mx = ImGui::GetIO().MousePos.x;
         float rel = (mx - track.x) / tw;
