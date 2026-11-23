@@ -560,6 +560,17 @@ int main(int argc, char **argv)
          * press leaks into the first frame after resuming. */
         mw_input_poll(&g_input);
 
+        /* A pad-only coin + Start is a start press too.  The keyboard 1/2/3
+         * path above latches game_started; pad Start only contributes service
+         * bits, which nothing else observes, so without this the display mode
+         * picked in the launcher never engages for a controller player.
+         * Level-with-credits matches the game's own edge-latched service
+         * semantics (same reasoning as the cheat pid gate above). */
+        if (!game_started &&
+            (g_input.start[0] | g_input.start[1] | g_input.start[2]) &&
+            machine.workram[0x2000] > 0)
+            game_started = 1;
+
         if (!paused && !settings_open) {
             update_inputs(&machine);
             s18_run_frame(&machine);
@@ -612,6 +623,9 @@ int main(int argc, char **argv)
             if (changed) settings_dirty = 1;
             if (reset_request) {
                 mw_m68k_reset(&machine);
+                /* RESET GAME clears the cheats exactly like F5: they are
+                 * session-only, and the panel says so. */
+                memset(&g_cheats, 0, sizeof(g_cheats));
                 paused = 0;
             }
             if (quit_request) running = 0;

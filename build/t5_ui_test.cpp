@@ -14,6 +14,7 @@
 #include <SDL.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
@@ -185,6 +186,39 @@ static std::string read_file(const char *path)
     return out;
 }
 
+/* Value of a `key=value` line, or "" when absent. */
+static std::string ini_value(const std::string &ini, const char *key)
+{
+    std::string out;
+    std::string k = std::string(key) + "=";
+    size_t at = ini.find(k);
+    if (at == std::string::npos) return out;
+    at += k.size();
+    while (at < ini.size() && ini[at] != '\r' && ini[at] != '\n')
+        out.push_back(ini[at++]);
+    return out;
+}
+
+/* Comma-separated slot of a key_map_pN line.  settings.c persists the actions
+ * as UP,DOWN,LEFT,RIGHT,B1,B2,B3. */
+static int ini_slot(const std::string &line, int idx, int *found)
+{
+    size_t at = 0;
+    int i = 0;
+    *found = 0;
+    while (at <= line.size()) {
+        size_t comma = line.find(',', at);
+        if (comma == std::string::npos) comma = line.size();
+        if (i == idx) {
+            *found = 1;
+            return atoi(line.substr(at, comma - at).c_str());
+        }
+        i++;
+        at = comma + 1;
+    }
+    return -1;
+}
+
 /* Panel geometry mirrors mw_ui_draw_controllers (DisplaySize 1280x720, s=1). */
 static const float SCALE_W = 1080.0f, SCALE_H = 700.0f;
 static const float PANEL_X = (1280.0f - SCALE_W) * 0.5f;
@@ -290,7 +324,20 @@ static void run_panel(void)
     key(SDL_SCANCODE_Q);
     check(g_st.key_map[0][MW_IN_ACT_B1] == SDL_SCANCODE_Q, "Q stored into key_map_p1 B1");
     ini = read_file(g_ini);
-    check(ini.find("key_map_p1=") != std::string::npos, "settings.ini has a key_map_p1 line");
+    {
+        /* The line exists in every saved file, so assert the content: B1 (slot
+         * 4 of UP,DOWN,LEFT,RIGHT,B1,B2,B3) must now hold Q and not the old Z.
+         * settings.c writes key_map_p%d with a zero-based p, so player index 0
+         * (P1) is key_map_p0. */
+        int found = 0;
+        int b1 = ini_slot(ini_value(ini, "key_map_p0"), MW_IN_ACT_B1, &found);
+        printf("settings.ini key_map_p0 [B1] = %d (SDL_SCANCODE_Q = %d)\n",
+               b1, (int)SDL_SCANCODE_Q);
+        check(found && b1 == SDL_SCANCODE_Q,
+              "settings.ini key_map_p0 holds Q in the B1 slot");
+        check(b1 != SDL_SCANCODE_Z,
+              "settings.ini key_map_p0 no longer holds Z in the B1 slot");
+    }
     shot("c3_bound");
 
     /* ---- pad capture with no controller attached: ESC is the way out ---- */

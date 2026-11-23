@@ -296,7 +296,9 @@ work RAM after every frame, never written to `settings.ini`, and cleared by
 - **INVINCIBILITY** -- freezes player health so damage cannot kill.
 - **INFINITE MAGIC** -- refills the dance magic charge every frame.
 - **FREE CREDITS** -- holds 9 credits on the counter (works before a game
-  starts too).
+  starts too). The written credit value is machine NVRAM, so it persists into
+  the next launch like real inserted coins and spends down as it is used; F5
+  still clears the toggle itself.
 
 The HUD digits are drawn from the value captured at the start of a frame, so
 a freeze can show up one frame late; judge it by surviving, not by the digit.
