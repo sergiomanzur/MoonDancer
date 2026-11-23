@@ -15,16 +15,16 @@ findings below were re-confirmed with plain `--dump` runs on the final build.
 | Cheat | 1P | 2P | 3P | Width | Range / initial | Direction |
 |---|---|---|---|---|---|---|
 | Lives | `0x1A58` | `0x1A98` | `0x1AD8` | byte | init from `0x2029` (DSW Lives: 2 or 3) | **−1** per death |
-| Health (vitality) | `0x001C` | `0x00DC` | `0x019C` | byte | max `0x30` (Player Vitality = Low, default DSW `0xFD`); `0x40` when High | **−damage** per hit |
+| Health (vitality) | `0x001C` | `0x00DC` | `0x019C` | byte | max `0x30` with SW2:4 *Player Vitality* = Low (default DSW `0xFD`); `0x40` when SW2:4 is High (bit `0x08` clear, e.g. `0xF5`) | **−damage** per hit |
 | Dance magic | `0x1A79` | `0x1AB9` | `0x1AF9` | byte | starts at `0x01`; no hard cap seen (HUD draws one icon per unit) | **−1** per dance |
 
 Freeze values for Task 7:
 
 - **Infinite lives** — write `0x09` to `0x1A58`, `0x1A98`, `0x1AD8` every frame.
-- **Invincibility** — write `0x30` to `0x001C`, `0x00DC`, `0x019C` every frame
-  (`0x40` if the DSW "Player Vitality" switch is High). Only needed for slots
-  that are in play; writing the byte while the player object is idle is harmless
-  (the game overwrites it on spawn).
+- **Invincibility** — write `0x30` to `0x001C`, `0x00DC`, `0x019C` every frame,
+  under either vitality setting (see the caveat below; `0x40` is only the High
+  max). Only needed for slots that are in play; writing the byte while the
+  player object is idle is harmless (the game overwrites it on spawn).
 - **Infinite dance magic** — write `0x05` to `0x1A79`, `0x1AB9`, `0x1AF9`
   every frame (each dance consumes one unit, so the freeze keeps them refilled;
   5 keeps the HUD icon row inside the 1P column).
@@ -216,34 +216,49 @@ at f=2000) and `0x00` in `build/kids2b.txt` at f=2000/f=2600 (that replay burns
 through continues), so it is a per-life/room charge that has to be re-written
 every frame to be "infinite".
 
-## Act select (`0x21E1`) — scope
+## Act select (`0x21E1`) — not usable for cheats
 
-Quick checks only (single-frame and continuous pokes of `0x21E1`, then
-screenshots at f=2400):
+`0x21E1` is `0x00` until f=1010 and `0x07` from f=1011 onward in the idle
+replay (`--watch 0x21E1`), i.e. f=1011 is the room build and 7 is the act of the
+first room. Experiments (single-frame and continuous pokes, screenshots plus
+the byte trace):
 
 | write | result |
 |---|---|
-| `0x21E1 = 0x05` at f=2200 (live room) | **corrupt**: at f=2400 the player is shoved to the right edge of the map with an empty bar, HUD still reads `ROUND 1 / STAGE 1`; the act-5 room is not loaded |
-| `0x21E1 = 0x09` at f=2200 (live room) | same: screen layout changes, no act 9 room, bar empty |
-| `0x21E1 = 0x05` continuously from f=1020 | same broken end-of-room scroll, act 5 never loads |
-| `0x21E1 = 0x05/0x09` at f=1100/1150 (character select) | **no effect at all** (frame-identical to the un-poked run) — the game rewrites the act byte during its own init |
+| `0x21E1 = 0x05` at f=2200 (live room) | corrupt: at f=2400 the player is shoved to the right edge of the map with an empty bar, HUD still `ROUND 1 / STAGE 1`, act 5 never loads; still broken at f=4200 |
+| `0x21E1 = 0x09` at f=2200 (live room) | same: layout shifts, no act 9 room, bar empty |
+| `0x21E1 = 0x05` continuously from f=1020 | same broken end-of-room scroll |
+| single-frame `0x21E1 = 0x05` at f=1008 / 1011 / 1012 / 1013 / 1015 / 1020 / 1050 (spanning the f=1011 build) | byte reads 5 until f=1011 (for f=1008) or f=1196 (for the later frames), then the game rewrites it to 7; the f=2500 screen is **frame-identical to the un-poked run** (pixel diff 0) — the act-5 room never loads |
+| single-frame `0x21E1 = 0x05` at f=2200 (live room) | byte is back to `0x07` at f=2202 — the game rewrites the act byte every frame |
 
-Conclusion: writing the act byte alone does **not** transition to another act's
-room; it only triggers the end-of-room logic and desyncs the player object.
-`0x21E1` is the room/act cursor, but a safe jump needs the rest of the room
-load state (unknown). **Ship act select as start-of-run only** (and note that a
-start-of-run write must land after the game's own init, since writes at f=1100
-are overwritten). Task 7 should treat live act jumping as unsupported; the
-byte itself is still fine to *read*.
+Conclusion: **no verified window exists.** `0x21E1` is derived state that the
+game recomputes from its own room state (writes are reverted within 1–2 frames),
+not a request/selection byte, and a one-frame mismatch only trips the
+end-of-room logic and wedges the player object. **Task 7 must not expose act
+selection** — a single act-byte write is not a supported mechanism here; the
+byte is read-only for cheat purposes (the real act/room selection state is
+unknown).
 
 ## Caveats
 
 - **HUD semantics**: the HUD lives digit shows *spare* lives (`0x1A58 - 1`).
   With DSW Lives = 2 (default `0xFD`) the game starts with `0x1A58 = 2` and
   shows `x01`; after one death `0x1A58 = 1` and it shows `x00`.
-- **Health max is DSW-dependent** (`0x30` Low / `0x40` High). Freezing at `0x30`
-  is safe on the default config and still prevents death on High (the bar just
-  reads 75%); freezing at `0x40` on Low would overrun the bar graphic.
+- **Health max is DSW-dependent** (`0x30` Low / `0x40` High). The DIP is
+  `SW2:4` "Player Vitality": bit `0x08` set = Low (default `0xFD`), clear = High
+  (sample `0xF5`). Freezing at `0x30` is safe on the default config and still
+  prevents death on High (the bar just reads 75%); **always writing `0x30` and
+  ignoring the vitality setting is the recommended behaviour** — writing `0x40`
+  on Low would overrun the bar graphic.
+- **HUD lag**: the HUD digits are drawn from the value at the start of the frame,
+  so a per-frame freeze shows up one frame late. In the frozen-lives run the
+  digit read `x7` at f=4200 even though `0x1A58` was rewritten to `0x09` every
+  frame (the death sequence subtracts from it more than once), so the displayed
+  digit trails the frozen value; judge a freeze by the byte and by surviving,
+  not by the digit.
+- **Width**: all three values are single bytes — the adjacent byte (lives
+  `+0x09`, health `+0x1D`, magic `+0x2A`) reads `0x00` in every dump, so there is
+  no 16-bit counter hiding next to them.
 - **Damage is a plain counter**, so "invincibility = freeze at max" is correct;
   no one-shot damage script exists. Keep the freeze applied *every* frame — a
   single write is overwritten by the next hit.
@@ -272,7 +287,12 @@ build\mwalk_headless.exe --rom-dir roms --frames 1760 --replay build_snd\dance_1
 
 # THREE PLAYERS (stride check)
 build\mwalk_headless.exe --rom-dir roms --frames 2600 --replay build\cheat_3p.txt --dsw 0xED --dump build\chk
+
+# ACT: the byte is derived state - value trace without any poke
+build\mwalk_headless.exe --rom-dir roms --frames 2500 --replay build\cheat_idle.txt --watch 0x21E1
 ```
 
-All of the above were run on the final, hook-free `mwalk_headless.exe`; the
-30 000-frame `--play` regression is green (0 recover / 0 REC MISS / 0 illegal).
+All address dumps above were run on the final, hook-free `mwalk_headless.exe`;
+only the act-select probe table used the temporary `MW_POKE` hook (removed
+again before commit). The 30 000-frame `--play` regression is green
+(0 recover / 0 REC MISS / 0 illegal).
