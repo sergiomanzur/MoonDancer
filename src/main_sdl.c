@@ -311,7 +311,7 @@ static int extract_archive(const char *zip, char *romdir, int cap)
     return mw_extract_zip(zip, cache, romdir, cap) == 0;
 }
 
-int main(int argc, char **argv)
+int mw_game_main(int argc, char **argv)
 {
     const char *romdir = "roms";
     const char *zip = NULL;
@@ -336,10 +336,13 @@ int main(int argc, char **argv)
         }
     }
 
+#ifndef __ANDROID__
+    /* On Android the launcher process already owns SDL. */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
+#endif
 
     /* Writable state (NVRAM, screenshots) follows the host policy instead of
      * the process CWD.  Packaged builds put it beside the executable, which is
@@ -746,10 +749,20 @@ int main(int argc, char **argv)
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     mw_input_shutdown();
+#ifndef __ANDROID__
     SDL_Quit();
+#endif
     if (nvram_on)
         s18_save_nvram(&machine, nvram);
     s18_video_shutdown();
     s18_shutdown(&machine);
     return 0;
 }
+
+#ifndef __ANDROID__
+/* Desktop exe entry point; behavior is the mw_game_main() body unchanged. */
+int main(int argc, char **argv)
+{
+    return mw_game_main(argc, argv);
+}
+#endif

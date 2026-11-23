@@ -15,6 +15,11 @@ int mw_host_base_dir(char *buf, int cap);
 /* Android only: one-time copy of APK assets (fonts, background, optional
  * bundled mwalk.zip) into the data dir. No-op elsewhere. */
 void mw_host_extract_assets(void);
+/* Game front end, callable as a function so a host process can run it
+ * in-process. The desktop exe reaches it through a thin main(); on Android
+ * the launcher calls it directly and owns SDL_Init/SDL_Quit. Returns 0 on a
+ * clean exit, non-zero on a startup failure. */
+int mw_game_main(int argc, char **argv);
 
 #ifdef __cplusplus
 }
