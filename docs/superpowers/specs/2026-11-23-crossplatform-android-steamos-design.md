@@ -54,9 +54,11 @@ hardware.
 
 ## Constraints
 
-- Host is Windows 11. Android verification = the user's device (adb access
-  question pending with the user; verification loop set accordingly). Linux/
-  AppImage verification = WSL2 + WSLg.
+- Host is Windows 11. Android verification = the user's device over **USB
+  adb (confirmed reachable)**: a Retroid Pocket 6 handheld — Android 13,
+  arm64-v8a, built-in gamepad controls (SDL gamecontroller sees them, so pad
+  parity is testable day one; touch layer remains full scope). Linux/AppImage
+  verification = WSL2 + WSLg.
 - Existing stack: C11/C++17, CMake 3.20+, SDL2 2.30.x, SDL_Renderer-based
   ImGui backends (`imgui_impl_sdl2` + `imgui_impl_sdlrenderer2`), settings in
   `%APPDATA%` on Windows via SDL pref path.
@@ -193,8 +195,10 @@ hardware.
   `screenSize|orientation` config changes handled without restart).
 - APK packaging + a private-bundle script that embeds the user's `mwalk.zip`;
   public APK stays ROM-free.
-- Verification: standing regression suite; `-Wall` clean NDK build; `adb
-  install` + on-device checklist — loop shape pending the user's adb answer.
+- Verification: standing regression suite; `-Wall` clean NDK build (arm64-v8a
+  is the shipping ABI — matches the test device; extra ABIs are out of scope
+  v1); `adb install` + logcat iteration + an on-device checklist run by me over
+  USB, with the user's hands-on impressions as the final gate.
 
 ### Phase C — SteamOS AppImage
 
