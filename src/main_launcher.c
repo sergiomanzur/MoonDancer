@@ -20,6 +20,7 @@
 #endif
 
 #include "settings.h"
+#include "host_port.h"
 #include "input.h"
 #include "ui.h"
 #include "launcher_music.h"
@@ -252,9 +253,11 @@ int main(int argc, char **argv)
     }
 #endif
 
-    const char *base_sdl = SDL_GetBasePath();
     char base[2048];
-    snprintf(base, sizeof(base), "%s", base_sdl ? base_sdl : "./");
+    if (!mw_host_base_dir(base, (int)sizeof(base))) {
+        fprintf(stderr, "Could not determine the launcher asset directory.\n");
+        return 1;
+    }
 
     char settings_path[2048];
     mw_settings_path(settings_path, (int)sizeof(settings_path));

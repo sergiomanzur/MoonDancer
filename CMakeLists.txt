@@ -110,6 +110,7 @@ if(MW_BUILD_SDL)
         add_executable(mwalk
             src/main_sdl.c
             src/input.c
+            src/host_port.c
             src/zip_loader.c
             third_party/miniz/miniz.c
             third_party/miniz/miniz_tdef.c
@@ -120,7 +121,8 @@ if(MW_BUILD_SDL)
         target_link_libraries(mwalk PRIVATE mwsystem18 mwui ${MW_SDL_LINK_LIBS})
         set_target_properties(mwalk PROPERTIES LINKER_LANGUAGE CXX)
 
-        add_executable(mwalk_launcher src/main_launcher.c src/input.c src/launcher_music.c)
+        add_executable(mwalk_launcher src/main_launcher.c src/input.c src/host_port.c
+            src/launcher_music.c)
         target_link_libraries(mwalk_launcher PRIVATE mwui ${MW_SDL_LINK_LIBS})
         set_target_properties(mwalk_launcher PROPERTIES LINKER_LANGUAGE CXX)
         if(WIN32)

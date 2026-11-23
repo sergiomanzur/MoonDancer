@@ -23,6 +23,7 @@
 #include "sound.h"
 #include "mcu.h"
 #include "settings.h"
+#include "host_port.h"
 #include "input.h"
 #include "ui.h"
 #include "zip_loader.h"
@@ -314,7 +315,7 @@ int main(int argc, char **argv)
 {
     const char *romdir = "roms";
     const char *zip = NULL;
-    const char *nvram = "nvram/mwalk/nvram";
+    const char *nvram = NULL; /* --nvram FILE; the default is resolved below */
     int nvram_on = 1;
     int start_settings = 0;
     int cli_audio = 0;
@@ -337,6 +338,16 @@ int main(int argc, char **argv)
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+        return 1;
+    }
+
+    /* Writable state (NVRAM, screenshots) follows the host policy instead of
+     * the process CWD.  Packaged builds put it beside the executable, which is
+     * where the launcher's CWD already pointed. */
+    char data_dir[2048];
+    if (!mw_host_data_dir(data_dir, (int)sizeof(data_dir))) {
+        fprintf(stderr, "Could not determine the Moonwalker data directory.\n");
+        SDL_Quit();
         return 1;
     }
 
@@ -379,9 +390,17 @@ int main(int argc, char **argv)
     }
 
     s18_init(&machine, rom, key);
+    char nvram_default[2048];
+    if (!nvram) {
+        snprintf(nvram_default, sizeof(nvram_default), "%snvram/mwalk/nvram", data_dir);
+        nvram = nvram_default;
+    }
     if (nvram_on) {
-        MW_MKDIR("nvram");
-        MW_MKDIR("nvram/mwalk");
+        char nvram_root[2048];
+        snprintf(nvram_root, sizeof(nvram_root), "%snvram", data_dir);
+        MW_MKDIR(nvram_root);
+        snprintf(nvram_root, sizeof(nvram_root), "%snvram/mwalk", data_dir);
+        MW_MKDIR(nvram_root);
         s18_load_nvram(&machine, nvram);
     }
     mw_m68k_init(&machine);
@@ -554,8 +573,10 @@ int main(int argc, char **argv)
                     int em = game_started ? g_settings.display_mode : MW_DISPLAY_ORIGINAL;
                     int sw = mw_display_crop_width(em);
                     int sx = mw_display_crop_x(em, machine.view_w);
+                    char shot[2048];
                     uint32_t *frame = s18_render_frame(&machine);
-                    s18_save_bmp_rect("moonwalker.bmp", frame, machine.view_w,
+                    snprintf(shot, sizeof(shot), "%smoonwalker.bmp", data_dir);
+                    s18_save_bmp_rect(shot, frame, machine.view_w,
                                       sx, 0, sw, S18_SCREEN_H);
                 } else if (event.key.keysym.scancode == SDL_SCANCODE_F5) {
                     mw_m68k_reset(&machine);
