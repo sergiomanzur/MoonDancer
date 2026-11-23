@@ -326,6 +326,50 @@ int main(void)
         pad_button(jh[1], SDL_CONTROLLER_BUTTON_Y, 0);
         mw_input_poll(&r);
 
+        /* Stored GUID wins over connection order.  All three virtual pads
+         * share one GUID, so binding player 3 to that GUID must put it on
+         * slot 0: slot 0's dpad then drives P3 and nobody else. */
+        {
+            char shared[33];
+            snprintf(shared, sizeof(shared), "%s", mw_input_pad_guid(0));
+            check_int("g virtual pads share a GUID",
+                      (int)(strlen(shared) == 32 &&
+                            strcmp(shared, mw_input_pad_guid(1)) == 0 &&
+                            strcmp(shared, mw_input_pad_guid(2)) == 0), 1);
+
+            mw_input_assign(shared, 2);
+            pad_button(jh[0], SDL_CONTROLLER_BUTTON_DPAD_UP, 1);
+            mw_input_poll(&r);
+            check_int("g stored GUID puts p3 on slot 0", r.actions[2], MW_IN_UP);
+            check_int("g stored GUID p1 does not steal", r.actions[0], 0);
+            check_int("g stored GUID p2 does not steal", r.actions[1], 0);
+            pad_button(jh[0], SDL_CONTROLLER_BUTTON_DPAD_UP, 0);
+            mw_input_poll(&r);
+
+            /* A stored GUID that matches no connected pad reserves that
+             * player: the three attached pads fill the other players only. */
+            mw_input_assign("", 2); /* back to plain connection order */
+            mw_input_assign("deadbeefdeadbeefdeadbeefdeadbeef", 0);
+            check_str("g reserved player has no pad", mw_input_pad_guid(0), "");
+            check_int("g reserved keeps all pads open", mw_input_pad_count(), 3);
+            pad_button(jh[0], SDL_CONTROLLER_BUTTON_DPAD_LEFT, 1);
+            mw_input_poll(&r);
+            check_int("g reserved p1 stays empty", r.actions[0], 0);
+            check_int("g slot 0 auto-fills p2 instead", r.actions[1], MW_IN_LEFT);
+            check_int("g p3 untouched by reservation", r.actions[2], 0);
+            pad_button(jh[0], SDL_CONTROLLER_BUTTON_DPAD_LEFT, 0);
+            mw_input_poll(&r);
+
+            /* Clearing the binding returns to connection order for the
+             * remaining assertions. */
+            mw_input_assign("", 0);
+            pad_button(jh[0], SDL_CONTROLLER_BUTTON_DPAD_DOWN, 1);
+            mw_input_poll(&r);
+            check_int("g reset returns slot 0 to p1", r.actions[0], MW_IN_DOWN);
+            pad_button(jh[0], SDL_CONTROLLER_BUTTON_DPAD_DOWN, 0);
+            mw_input_poll(&r);
+        }
+
         /* Hot-unplug: the pad's bits vanish, the keyboard's survive. */
         mw_input_set_keyboard(SDL_SCANCODE_Z, 1, 1);
         pad_button(jh[0], SDL_CONTROLLER_BUTTON_DPAD_DOWN, 1);
