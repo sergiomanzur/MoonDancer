@@ -30,6 +30,20 @@
  *       build/t5_ui_test.cpp -x c src/input.c
  *       -L build -L third_party/sdl2_dl/SDL2-2.30.11/x86_64-w64-mingw32/lib
  *       -lmwui -limgui -lSDL2main -lSDL2 -o build/t5_ui_test.exe
+ *
+ * Linux (WSL, system SDL2; exercises the POSIX opendir scan branch):
+ *   g++ -std=c++17 -O1 -Wno-format-truncation -I src -I third_party/imgui
+ *       -I third_party/imgui/backends -I third_party/stb $(pkg-config sdl2 --cflags)
+ *       build/t5_ui_test.cpp src/ui.cpp src/input.c src/settings.c
+ *       third_party/imgui/imgui.cpp third_party/imgui/imgui_draw.cpp
+ *       third_party/imgui/imgui_tables.cpp third_party/imgui/imgui_widgets.cpp
+ *       third_party/imgui/backends/imgui_impl_sdl2.cpp
+ *       third_party/imgui/backends/imgui_impl_sdlrenderer2.cpp
+ *       $(pkg-config sdl2 --libs) -o build/t5_linux
+ *   SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build/t5_linux build/browse.ini browse
+ *
+ * All fixture/screenshot paths are derived from the process working directory
+ * (the repo root), so the same source runs unchanged on both hosts.
  */
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
@@ -43,6 +57,7 @@
 #include <direct.h>
 #else
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include "imgui.h"
@@ -58,8 +73,10 @@ static SDL_Renderer *g_ren;
 static mw_ui *g_ui;
 static mw_settings g_st;
 static const char *g_ini;
-static const char *g_base = "C:/Users/sergi/Homestead/code/moonwalkerRecomp/";
-static const char *g_shots = "C:/Users/sergi/Homestead/code/moonwalkerRecomp/build/t5_shots";
+/* Derived from the working directory (the repo root) so the fixture tree,
+ * screenshots and asset base work on Windows and Linux unchanged. */
+static char g_base[1024];
+static char g_shots[1024];
 static int g_open = 1;
 static int g_changed;
 static int g_fail;
@@ -130,7 +147,7 @@ static void pump(void)
 
     if (g_pending_shot) {
         int w = 0, h = 0;
-        char path[512];
+        char path[2048];
         SDL_GetRendererOutputSize(g_ren, &w, &h);
         SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
         if (s) {
@@ -609,9 +626,9 @@ static void run_nav(void)
 /* ---- in-UI archive browser (Task 5) ----
  * Fixture geometry mirrors mw_ui_file_browser at DisplaySize 1280x720 (s = 1):
  * panel (220,30) 840x660, px/py 258/58, list at y 200 with 38-px rows. */
-static const char *FB_ROOT = "C:/Users/sergi/Homestead/code/moonwalkerRecomp/build/fb_fixture";
-static const char *FB_NAV  = "C:/Users/sergi/Homestead/code/moonwalkerRecomp/build/fb_fixture/nav";
-static const char *FB_MANY = "C:/Users/sergi/Homestead/code/moonwalkerRecomp/build/fb_fixture/many";
+static char FB_ROOT[1024];
+static char FB_NAV[1024];
+static char FB_MANY[1024];
 static const float FB_PW = 840.0f, FB_PH = 660.0f;
 static const float FB_PANEL_X = (1280.0f - FB_PW) * 0.5f;
 static const float FB_PANEL_Y = (720.0f - FB_PH) * 0.5f;
@@ -653,6 +670,28 @@ static void make_dir(const char *p)
 #endif
 }
 
+/* Fixture, screenshot and asset paths all hang off the working directory (the
+ * repo root), which is what both the Windows and the WSL invocations use. */
+static void init_paths(void)
+{
+    char cwd[512];
+    size_t n;
+#ifdef _WIN32
+    if (!_getcwd(cwd, (int)sizeof(cwd))) cwd[0] = 0;
+#else
+    if (!getcwd(cwd, sizeof(cwd))) cwd[0] = 0;
+#endif
+    if (!cwd[0]) snprintf(cwd, sizeof(cwd), ".");
+    n = strlen(cwd);
+    while (n > 0 && (cwd[n - 1] == '/' || cwd[n - 1] == '\\')) cwd[--n] = 0;
+    snprintf(g_base, sizeof(g_base), "%s/", cwd);
+    snprintf(g_shots, sizeof(g_shots), "%sbuild/t5_shots", g_base);
+    snprintf(FB_ROOT, sizeof(FB_ROOT), "%sbuild/fb_fixture", g_base);
+    snprintf(FB_NAV, sizeof(FB_NAV), "%s/nav", FB_ROOT);
+    snprintf(FB_MANY, sizeof(FB_MANY), "%s/many", FB_ROOT);
+    make_dir(g_shots);
+}
+
 static void make_file(const char *p, const char *body)
 {
     FILE *f = p ? fopen(p, "wb") : nullptr;
@@ -667,13 +706,13 @@ static void make_file(const char *p, const char *body)
 /* build/fb_fixture/{a.zip, b.txt, sub/c.zip, nav/only.zip, many/p00..p15.zip} */
 static void make_fixtures(void)
 {
-    std::string root = g_base;
+    std::string root = FB_ROOT;
+    std::string build = g_base;
     int i;
     char name[64];
-    root += "build/fb_fixture";
-    make_dir("C:/Users/sergi/Homestead/code/moonwalkerRecomp");
-    make_dir("C:/Users/sergi/Homestead/code/moonwalkerRecomp/build");
-    make_dir(root.c_str());
+    build += "build";
+    make_dir(build.c_str());
+    make_dir(FB_ROOT);
     make_dir((root + "/sub").c_str());
     make_dir((root + "/nav").c_str());
     make_dir((root + "/many").c_str());
@@ -787,6 +826,7 @@ int main(int argc, char **argv)
 {
     const char *mode = argc > 2 ? argv[2] : "panel";
     g_ini = argc > 1 ? argv[1] : nullptr;
+    init_paths();
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
