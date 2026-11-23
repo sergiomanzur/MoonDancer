@@ -544,6 +544,11 @@ int mw_game_main(int argc, char **argv)
     Uint64 fps_last = SDL_GetPerformanceCounter();
     uint64_t last = SDL_GetPerformanceCounter();
     const double frame_time = 1.0 / S18_FPS;
+    /* Touch capability, not a guess about which window system sends finger
+     * events.  SDL enumerates the Android screen and Windows touchscreens /
+     * pens as touch devices and reports 0 on a non-touch desktop.  The input
+     * feed below and Task 7's draw hook both key off this same flag. */
+    const int touch_capable = SDL_GetNumTouchDevices() > 0;
 
     while (running) {
         SDL_Event event;
@@ -614,8 +619,13 @@ int mw_game_main(int argc, char **argv)
             case SDL_FINGERDOWN:
             case SDL_FINGERMOTION:
                 /* SDL normalizes the window coordinates to [0,1]; the touch
-                 * module's geometry uses the same space.  Desktop Windows
-                 * sends no finger events, so this path stays dormant there. */
+                 * module's geometry uses the same space.  Pumping is
+                 * unconditional because it only updates module state: the
+                 * per-frame feed below is the single gate that decides what
+                 * reaches the game.  Finger events are real on Windows
+                 * touchscreens and pens too (SDL synthesizes them from
+                 * WM_TOUCH/WM_POINTER), so dormancy is a capability question,
+                 * not a window-system one. */
                 mw_touch_finger(1, event.tfinger.x, event.tfinger.y,
                                 (int)event.tfinger.fingerId, &g_touch);
                 break;
@@ -629,9 +639,18 @@ int mw_game_main(int argc, char **argv)
         }
 
         /* On-screen touch (P1).  mw_touch_set() forgets fingers in progress,
-         * so only apply a real configuration change; then drain this frame's
-         * latches and feed the bits through the same merge as keyboard/pads.
-         * The MENU button's latch is consumed by the overlay wiring. */
+         * so only apply a real configuration change; mw_touch_frame() runs
+         * every frame so a latch can never be banked for later by a hidden
+         * layer.
+         *
+         * touch_feed is the single enforcement point.  Finger events are real
+         * on Windows touchscreens and pens too, so a host without a touch
+         * device must not feed them: that would drive an invisible P1 stick
+         * (and an invisible MENU latch) from a pen stroke.  The MENU latch
+         * itself stays observable whenever the host is touch-capable, even
+         * with touch_on=0 -- it is the way back to the TOUCH toggle (plan
+         * Review Focus #2); Task 7's draw hook keys off this same
+         * touch_capable flag. */
         if (g_settings.touch_on != applied_touch_on ||
             g_settings.touch_mode != applied_touch_mode) {
             mw_touch_set(g_settings.touch_on, g_settings.touch_mode);
@@ -639,14 +658,25 @@ int mw_game_main(int argc, char **argv)
             applied_touch_mode = g_settings.touch_mode;
         }
         mw_touch_frame(&g_touch);
-        mw_input_set_touch_action(MW_IN_ACT_UP, (g_touch.actions & MW_IN_UP) != 0);
-        mw_input_set_touch_action(MW_IN_ACT_DOWN, (g_touch.actions & MW_IN_DOWN) != 0);
-        mw_input_set_touch_action(MW_IN_ACT_LEFT, (g_touch.actions & MW_IN_LEFT) != 0);
-        mw_input_set_touch_action(MW_IN_ACT_RIGHT, (g_touch.actions & MW_IN_RIGHT) != 0);
-        mw_input_set_touch_action(MW_IN_ACT_B1, (g_touch.actions & MW_IN_B1) != 0);
-        mw_input_set_touch_action(MW_IN_ACT_B2, (g_touch.actions & MW_IN_B2) != 0);
-        mw_input_set_touch_action(MW_IN_ACT_B3, (g_touch.actions & MW_IN_B3) != 0);
-        mw_input_set_touch_service(g_touch.start, g_touch.coin);
+        {
+            const int touch_feed = touch_capable && g_settings.touch_on;
+            mw_input_set_touch_action(MW_IN_ACT_UP,
+                                      touch_feed && ((g_touch.actions & MW_IN_UP) != 0));
+            mw_input_set_touch_action(MW_IN_ACT_DOWN,
+                                      touch_feed && ((g_touch.actions & MW_IN_DOWN) != 0));
+            mw_input_set_touch_action(MW_IN_ACT_LEFT,
+                                      touch_feed && ((g_touch.actions & MW_IN_LEFT) != 0));
+            mw_input_set_touch_action(MW_IN_ACT_RIGHT,
+                                      touch_feed && ((g_touch.actions & MW_IN_RIGHT) != 0));
+            mw_input_set_touch_action(MW_IN_ACT_B1,
+                                      touch_feed && ((g_touch.actions & MW_IN_B1) != 0));
+            mw_input_set_touch_action(MW_IN_ACT_B2,
+                                      touch_feed && ((g_touch.actions & MW_IN_B2) != 0));
+            mw_input_set_touch_action(MW_IN_ACT_B3,
+                                      touch_feed && ((g_touch.actions & MW_IN_B3) != 0));
+            mw_input_set_touch_service(touch_feed ? g_touch.start : 0,
+                                       touch_feed ? g_touch.coin : 0);
+        }
 
         /* Refresh the merged keyboard + pad state once per frame, even while
          * paused or in the panel, so the one-frame tap latch drains and no
