@@ -33,6 +33,15 @@
 #include <SDL_syswm.h>
 #endif
 
+/* mw_game_main may run inside the launcher's process (Android): the
+ * launcher owns SDL there, so the game must never tear it down on any
+ * exit path.  Desktop builds are byte-identical (plain SDL_Quit). */
+#ifdef __ANDROID__
+#define GAME_SDL_QUIT() ((void)0)
+#else
+#define GAME_SDL_QUIT() SDL_Quit()
+#endif
+
 static uint8_t key_state[SDL_NUM_SCANCODES];
 static uint8_t key_latch[SDL_NUM_SCANCODES];
 static mw_input_result g_input; /* keyboard + 3 pads, refreshed every frame */
@@ -350,7 +359,7 @@ int mw_game_main(int argc, char **argv)
     char data_dir[2048];
     if (!mw_host_data_dir(data_dir, (int)sizeof(data_dir))) {
         fprintf(stderr, "Could not determine the Moonwalker data directory.\n");
-        SDL_Quit();
+        GAME_SDL_QUIT();
         return 1;
     }
 
@@ -376,7 +385,7 @@ int mw_game_main(int argc, char **argv)
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Moonwalker ROM archive",
                 "Could not read the ZIP archive.\n\nSelect the Moonwalker (World) mwalk.zip with the "
                 "System 18 ROMs and the 315-5437.ic4 MCU.", NULL);
-            SDL_Quit();
+            GAME_SDL_QUIT();
             return 1;
         }
         romdir = extracted_romdir;
@@ -388,7 +397,7 @@ int mw_game_main(int argc, char **argv)
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Moonwalker ROMs",
             "Could not load the Moonwalker ROM set.\n\nSelect mwalk.zip, or place the extracted "
             "ROM files in the roms folder.", NULL);
-        SDL_Quit();
+        GAME_SDL_QUIT();
         return 1;
     }
 
@@ -418,7 +427,7 @@ int mw_game_main(int argc, char **argv)
     if (s18_video_init(&machine, romdir)) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Moonwalker ROMs",
             "The ROM set is missing the System 18 tile or sprite ROMs.", NULL);
-        SDL_Quit();
+        GAME_SDL_QUIT();
         return 1;
     }
 
@@ -426,7 +435,7 @@ int mw_game_main(int argc, char **argv)
     if (!mcu) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Moonwalker",
             "The MCU ROM could not be loaded from the archive.", NULL);
-        SDL_Quit();
+        GAME_SDL_QUIT();
         return 1;
     }
     /* The protection MCU deadlocks if the sound CPU is absent, so always
@@ -437,7 +446,7 @@ int mw_game_main(int argc, char **argv)
     if (!audio) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Moonwalker",
             "The audio ROM could not be loaded from the archive.", NULL);
-        SDL_Quit();
+        GAME_SDL_QUIT();
         return 1;
     }
 
@@ -749,9 +758,7 @@ int mw_game_main(int argc, char **argv)
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     mw_input_shutdown();
-#ifndef __ANDROID__
-    SDL_Quit();
-#endif
+    GAME_SDL_QUIT();
     if (nvram_on)
         s18_save_nvram(&machine, nvram);
     s18_video_shutdown();
