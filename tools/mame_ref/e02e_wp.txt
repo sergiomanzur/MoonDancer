@@ -1,0 +1,2 @@
+wp 0xFFE02E,2,w,1,{ printf "E02EHIT pc=%06X\n",pc; go }
+go

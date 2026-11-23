@@ -1,0 +1,2 @@
+wp 0xFFE031,1,w,1,{ printf "HIT31 pc=%06X\n",pc; go }
+go

@@ -1,0 +1,28 @@
+# Build artifacts and binaries
+build/
+build_trace/
+build_snd/
+build_right/
+build_sprite/
+dist/
+
+# User's ROM data — never tracked, never redistributed
+roms/
+refroms/
+mwalk.zip
+src/generated_game.c
+
+# Emulator test oracle binary tree
+tools/mame_dist/
+
+# Runtime state
+nvram/
+*.log
+*.bmp
+*.wav
+moonwalker.bmp
+
+# SDD scratch
+.superpowers/
+
+__pycache__/
