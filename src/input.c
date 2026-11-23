@@ -383,15 +383,25 @@ static void capture_apply(int code)
 
 void mw_input_begin_capture(int player, int action, int pad)
 {
-    g_in.capture_state = 0;
-    g_in.capture_code = 0;
-    g_in.capture_status = 0;
+    mw_input_cancel_capture();
     if (player < 0 || player >= MW_IN_PLAYERS) return;
     if (action < 0 || action >= MW_IN_ACTIONS) return;
     g_in.capture_player = player;
     g_in.capture_action = action;
     g_in.capture_pad = pad ? 1 : 0;
     g_in.capture_state = 1;
+}
+
+void mw_input_cancel_capture(void)
+{
+    g_in.capture_state = 0;
+    g_in.capture_code = 0;
+    g_in.capture_status = 0;
+}
+
+int mw_input_capture_active(void)
+{
+    return g_in.capture_state == 1;
 }
 
 int mw_input_capture_result(int *code)
@@ -430,6 +440,17 @@ void mw_input_process_event(const SDL_Event *e)
         break;
     case SDL_CONTROLLERBUTTONDOWN:
         if (g_in.capture_state != 1 || !g_in.capture_pad) break;
+        /* Source guard: a player that already owns a pad only captures from
+         * that pad's instance.  A stray press on another controller (or on a
+         * second pad bound to another player) would otherwise steal the
+         * binding for the wrong device.  Players without a pad accept any
+         * controller, so a reservation can still be filled by plugging in. */
+        {
+            int s = g_in.player_slot[g_in.capture_player];
+            if (s >= 0 && s < g_in.slots &&
+                g_in.pads[s].instance != e->cbutton.which)
+                break;
+        }
         capture_apply((int)e->cbutton.button);
         break;
     default:

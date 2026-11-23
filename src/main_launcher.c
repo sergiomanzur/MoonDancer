@@ -20,6 +20,7 @@
 #endif
 
 #include "settings.h"
+#include "input.h"
 #include "ui.h"
 
 static int file_exists(const char *p)
@@ -211,7 +212,7 @@ int main(int argc, char **argv)
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--settings")) start_settings = 1;
     }
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
@@ -251,6 +252,10 @@ int main(int argc, char **argv)
     mw_settings_path(settings_path, (int)sizeof(settings_path));
     mw_settings settings;
     mw_settings_load(&settings, settings_path);
+    /* Live device view in the launcher: the controller subsystem is up (see
+     * SDL_Init above) and the module mirrors the stored assignment/maps. */
+    mw_input_init();
+    mw_input_load_maps(&settings);
 
     char background[2048];
     snprintf(background, sizeof(background), "%sassets/launcher_background.jfif", base);
@@ -279,7 +284,11 @@ int main(int argc, char **argv)
 
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            /* The CONTROLLERS panel owns the key that answers its capture, so
+             * the launcher hotkeys (F1/ESC) stay out of the way while armed. */
+            int capture_busy = mw_input_capture_active();
             mw_ui_process_event(ui, &event);
+            mw_input_process_event(&event);
             switch (event.type) {
             case SDL_QUIT:
                 running = 0;
@@ -293,6 +302,7 @@ int main(int argc, char **argv)
                 break;
             case SDL_KEYDOWN:
                 if (event.key.repeat) break;
+                if (capture_busy) break;
                 if (event.key.keysym.scancode == SDL_SCANCODE_F1) {
                     settings_open = !settings_open;
                 } else if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
@@ -309,8 +319,16 @@ int main(int argc, char **argv)
         if (!settings_open)
             mw_ui_draw_launcher(ui, &settings, archive, archive_status(archive),
                                 &browse, &start, &open_settings, &quit);
-        if (settings_open)
-            mw_ui_draw_settings(ui, &settings, &settings_open, 0, NULL, NULL, &changed);
+        if (settings_open) {
+            if (mw_ui_tab(ui) == MW_UI_TAB_CONTROLLERS)
+                mw_ui_draw_controllers(ui, &settings, &settings_open, &changed);
+            else
+                mw_ui_draw_settings(ui, &settings, &settings_open, 0, NULL, NULL, &changed);
+        }
+        /* Same ruling as the game overlay: what the panel does not own is
+         * disarmed, so no capture survives a close, tab switch or START. */
+        if (!(settings_open && mw_ui_tab(ui) == MW_UI_TAB_CONTROLLERS))
+            mw_input_cancel_capture();
         SDL_RenderClear(renderer);
         mw_ui_draw_background(ui);
         mw_ui_end(ui);
@@ -340,12 +358,18 @@ int main(int argc, char **argv)
                     settings_dirty = 0;
                 }
                 save_last_archive(archive);
+                /* Release the pads before handing the window to mwalk.exe so
+                 * the game opens them as the only consumer, then rebuild the
+                 * device view once control comes back. */
+                mw_input_shutdown();
                 SDL_HideWindow(window);
                 int rc = spawn_game(base, archive);
                 SDL_ShowWindow(window);
                 SDL_RaiseWindow(window);
                 SDL_SetWindowInputFocus(window);
                 mw_settings_load(&settings, settings_path);
+                mw_input_init();
+                mw_input_load_maps(&settings);
                 if (rc != 0 && rc != -1) {
                     char msg[256];
                     snprintf(msg, sizeof(msg), "mwalk.exe exited with code %d.", rc);
@@ -369,6 +393,7 @@ int main(int argc, char **argv)
 
     if (settings_dirty)
         mw_settings_save(&settings, settings_path);
+    mw_input_shutdown();
     mw_ui_destroy(ui);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

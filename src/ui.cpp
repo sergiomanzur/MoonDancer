@@ -1,6 +1,8 @@
 #define IMGUI_DEFINE_MATH_OPERATORS
 #include "ui.h"
 
+#include "input.h"
+
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
 #include "imgui_impl_sdlrenderer2.h"
@@ -28,6 +30,12 @@ struct mw_ui {
     int bg_h;
     float dpi_scale;
     float layout_scale;
+    /* Overlay navigation (MW_UI_TAB_*) and the armed rebinding capture, so the
+     * CONTROLLERS panel can highlight the row that is waiting for input. */
+    int tab;
+    int cap_player;
+    int cap_action;
+    int cap_pad;
 };
 
 namespace {
@@ -386,6 +394,148 @@ int cycle_row(mw_ui *ui, const char *id, const char *label,
     return (index >= 0 && index < count) ? (index + 1) % count : 0;
 }
 
+/* ---------------- controllers panel helpers ---------------- */
+
+const char *const k_action_names[MW_IN_ACTIONS] = {
+    "UP", "DOWN", "LEFT", "RIGHT", "B1", "B2", "B3"
+};
+
+/* Two overlay nav chips drawn by both panels.  Clicking one switches the tab
+ * the host dispatches on next frame. */
+void overlay_tabs(mw_ui *ui, float right_x, float y, float s)
+{
+    static const char *const labels[2] = { "SETTINGS", "CONTROLLERS" };
+    const float cw = 124.0f * s, ch = 28.0f * s, gap = 6.0f * s;
+    float start = right_x - (2.0f * cw + gap);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+
+    for (int i = 0; i < 2; i++) {
+        ImVec2 p(start + i * (cw + gap), y);
+        char id[32];
+        ImVec2 ts;
+        bool hovered, selected;
+        snprintf(id, sizeof(id), "##overlaytab%d", i);
+        ImGui::SetCursorScreenPos(p);
+        ImGui::InvisibleButton(id, ImVec2(cw, ch));
+        hovered = ImGui::IsItemHovered();
+        selected = ui->tab == i;
+        dl->AddRectFilled(p, ImVec2(p.x + cw, p.y + ch),
+                          selected ? A(C_CYAN, 235) : IM_COL32(8, 12, 22, 235), 6.0f * s);
+        dl->AddRect(p, ImVec2(p.x + cw, p.y + ch),
+                    selected ? A(IM_COL32(210, 255, 255, 255), 245) : A(C_CYAN, hovered ? 150 : 60),
+                    6.0f * s, 0, selected ? 1.4f : 1.0f);
+        ts = text_size(ui->font_small, 11.0f * s, labels[i]);
+        text(dl, ui->font_small, 11.0f * s,
+             ImVec2(p.x + (cw - ts.x) * 0.5f, p.y + (ch - ts.y) * 0.5f - 1.0f * s),
+             selected ? IM_COL32(4, 9, 16, 255) : C_TEXT, labels[i]);
+        if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        if (ImGui::IsItemClicked()) ui->tab = i;
+    }
+}
+
+struct ctl_device {
+    char guid[33];
+    std::string name;
+};
+
+/* Connected game controllers offered by the assignment chip.  Deduped by GUID
+ * because the schema stores a GUID, not an instance: two identical pad models
+ * share one GUID and therefore one selector entry. */
+int enumerate_control_pads(ctl_device *out, int max)
+{
+    int n = SDL_NumJoysticks();
+    int count = 0;
+    if (!out || max <= 0) return 0;
+    for (int i = 0; i < n && count < max; i++) {
+        char guid[33];
+        int dup = 0;
+        const char *name;
+        if (!SDL_IsGameController(i)) continue;
+        SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(i), guid, (int)sizeof(guid));
+        for (int k = 0; k < count; k++) {
+            if (SDL_strcasecmp(out[k].guid, guid) == 0) { dup = 1; break; }
+        }
+        if (dup) continue;
+        snprintf(out[count].guid, sizeof(out[count].guid), "%s", guid);
+        name = SDL_GameControllerNameForIndex(i);
+        out[count].name = (name && *name) ? name : "Controller";
+        count++;
+    }
+    return count;
+}
+
+std::string scancode_label(int code)
+{
+    const char *n;
+    if (code < 0 || code >= SDL_NUM_SCANCODES) return "-";
+    n = SDL_GetScancodeName((SDL_Scancode)code);
+    return (n && *n) ? std::string(n) : std::string("-");
+}
+
+std::string pad_button_label(int code)
+{
+    const char *n;
+    std::string out;
+    if (code < 0 || code >= SDL_CONTROLLER_BUTTON_MAX) return "-";
+    n = SDL_GameControllerGetStringForButton((SDL_GameControllerButton)code);
+    if (!n || !*n) return "-";
+    for (const char *p = n; *p; ++p) {
+        char c = *p;
+        if (c == '_') c = ' ';
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        out.push_back(c);
+    }
+    return out;
+}
+
+/* Binding chip: a compact click target that shows the current key/button, or
+ * the "PRESS..." prompt while that row owns the capture. */
+bool binding_chip(mw_ui *ui, const char *id, const char *label, ImVec2 pos,
+                  ImVec2 sz, float s, bool waiting, bool bound)
+{
+    ImGui::SetCursorScreenPos(pos);
+    ImGui::InvisibleButton(id, sz);
+    bool hovered = ImGui::IsItemHovered();
+    bool clicked = ImGui::IsItemClicked();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    float fs = 13.0f * s;
+    ImVec2 ts = text_size(ui->font_button, fs, label);
+
+    if (ts.x > sz.x - 10.0f * s) {
+        fs = 10.0f * s;
+        ts = text_size(ui->font_button, fs, label);
+    }
+    dl->AddRectFilled(pos, ImVec2(pos.x + sz.x, pos.y + sz.y),
+                      waiting ? IM_COL32(34, 6, 32, 245) : IM_COL32(8, 12, 22, 235),
+                      6.0f * s);
+    dl->AddRect(pos, ImVec2(pos.x + sz.x, pos.y + sz.y),
+                waiting ? A(C_MAGENTA, 235) : A(C_CYAN, hovered ? 195 : (bound ? 78 : 42)),
+                6.0f * s, 0, waiting ? 1.5f : 1.0f);
+    text(dl, ui->font_button, fs,
+         ImVec2(pos.x + (sz.x - ts.x) * 0.5f, pos.y + (sz.y - ts.y) * 0.5f - 1.0f * s),
+         waiting ? IM_COL32(255, 196, 238, 255) : (bound ? C_TEXT : C_DIM), label);
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return clicked;
+}
+
+/* One player's pad selection: steals a GUID already bound to another player so
+ * the assignment is never ambiguous, mirrors the module maps into *settings and
+ * marks the host's settings dirty. */
+void apply_pad_assign(mw_settings *settings, int player, const char *guid, int *changed)
+{
+    const char *g = guid ? guid : "";
+    if (*g) {
+        for (int o = 0; o < MW_IN_PLAYERS; o++) {
+            if (o == player) continue;
+            if (settings->pad_guid[o][0] && SDL_strcasecmp(settings->pad_guid[o], g) == 0)
+                mw_input_assign("", o);
+        }
+    }
+    mw_input_assign(g, player);
+    mw_input_save_maps(settings);
+    if (changed) *changed = 1;
+}
+
 const char *const k_shader_names[3] = { "OFF", "SCANLINES", "CRT" };
 const int k_res_w[4] = { 1280, 1600, 1920, 2560 };
 const int k_res_h[4] = { 720, 900, 1080, 1440 };
@@ -438,6 +588,10 @@ extern "C" mw_ui *mw_ui_create(SDL_Window *window, SDL_Renderer *renderer,
     ui->bg_w = ui->bg_h = 0;
     ui->layout_scale = 1.0f;
     ui->dpi_scale = 1.0f;
+    ui->tab = MW_UI_TAB_SETTINGS;
+    ui->cap_player = -1;
+    ui->cap_action = -1;
+    ui->cap_pad = 0;
 
     int ww = 0, wh = 0, ow = 0, oh = 0;
     SDL_GetWindowSize(window, &ww, &wh);
@@ -794,6 +948,10 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
                  ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
                  ImGuiWindowFlags_NoBackground);
 
+    /* SETTINGS / CONTROLLERS are tabs of the one overlay; the host draws the
+     * panel mw_ui_tab() names on the next frame. */
+    overlay_tabs(ui, panel.x + pw - 54 * s, panel.y + 20 * s, s);
+
     volume_row(ui, settings, ImVec2(px, y_audio + 22 * s), pw - 76 * s, s, changed);
     bool snd = settings->sound_on != 0;
     if (toggle_row(ui, "##sound", "SOUND", "Music and sound effects",
@@ -872,6 +1030,271 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
+}
+
+extern "C" int mw_ui_tab(mw_ui *ui)
+{
+    return ui ? ui->tab : MW_UI_TAB_SETTINGS;
+}
+
+extern "C" void mw_ui_draw_controllers(mw_ui *ui, mw_settings *settings,
+                                       int *open, int *changed)
+{
+    if (!ui || !settings || !open) return;
+    ImGuiIO &io = ImGui::GetIO();
+    float w = io.DisplaySize.x, h = io.DisplaySize.y;
+    float s = ui_scale(ui);
+    ImDrawList *bg = ImGui::GetBackgroundDrawList();
+
+    /* A finished capture is consumed before drawing: the module already wrote
+     * the binding into its maps, so mirroring them into *settings plus the
+     * changed flag is all the host needs to persist it.  The check covers the
+     * finished-but-unread state too (capture_active() is already 0 then), so
+     * the answer produced between two frames is never dropped. */
+    if (ui->cap_player >= 0) {
+        int code = 0;
+        int r = mw_input_capture_result(&code);
+        if (r == 1) {
+            mw_input_save_maps(settings);
+            if (changed) *changed = 1;
+            ui->cap_player = -1;
+        } else if (r == -1 || !mw_input_capture_active()) {
+            /* Cancelled with ESC, or disarmed from outside (overlay closed,
+             * tab switched) - either way the row stops waiting. */
+            ui->cap_player = -1;
+        }
+    }
+
+    bg->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(2, 4, 10, 214));
+    for (float y = 0; y < h; y += 3.0f * s)
+        bg->AddLine(ImVec2(0, y), ImVec2(w, y), IM_COL32(0, 0, 0, 16), 1.0f);
+
+    float pw = 1080.0f * s, ph = 700.0f * s;
+    ImVec2 panel((w - pw) * 0.5f, (h - ph) * 0.5f);
+    draw_panel(bg, panel, ImVec2(pw, ph), 18 * s, true);
+    float px = panel.x + 38 * s;
+    float py = panel.y + 28 * s;
+
+    text_spaced(bg, ui->font_small, 14 * s, ImVec2(px, py),
+                A(C_CYAN, 230), "INPUT CONFIGURATION", 2.6f * s);
+    text_glow(bg, ui->font_title, 46 * s, ImVec2(px, py + 22 * s),
+              "CONTROLLERS", IM_COL32(245, 252, 255, 255), C_CYAN, s);
+    bg->AddRectFilledMultiColor(ImVec2(px, py + 86 * s),
+                                ImVec2(px + pw - 76 * s, py + 88 * s),
+                                C_MAGENTA, C_CYAN, C_CYAN, C_MAGENTA);
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(w, h));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+    ImGui::Begin("##controllers_ui", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                 ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+                 ImGuiWindowFlags_NoBackground);
+
+    overlay_tabs(ui, panel.x + pw - 54 * s, panel.y + 20 * s, s);
+
+    ctl_device dev[MW_IN_PLAYERS];
+    int devn = enumerate_control_pads(dev, MW_IN_PLAYERS);
+    int capturing = (mw_input_capture_active() && ui->cap_player >= 0 &&
+                     ui->cap_action >= 0 && ui->cap_action < MW_IN_ACTIONS) ? 1 : 0;
+
+    const float inner_w = pw - 76 * s;
+    const float gap = 18 * s;
+    const float colw = (inner_w - gap * (MW_IN_PLAYERS - 1)) / (float)MW_IN_PLAYERS;
+    const float top = py + 104 * s;
+    const float chip_h = 24 * s;
+    const float row_h = 30 * s;
+    const float key_w = 76 * s;
+    const float key_x = 108 * s;
+    const float pad_x = 192 * s;
+
+    for (int p = 0; p < MW_IN_PLAYERS; p++) {
+        float cx = px + p * (colw + gap);
+        char buf[128];
+        /* Interior pointers from the input module shift on close_slot(); copy
+         * them immediately, before anything else can open/close a pad. */
+        const char *live_name_p = mw_input_pad_name(p);
+        const char *live_guid_p = mw_input_pad_guid(p);
+        std::string live_name(live_name_p ? live_name_p : "");
+        std::string live_guid(live_guid_p ? live_guid_p : "");
+        std::string stored(settings->pad_guid[p]);
+        bool reserved = live_name.empty() && !stored.empty();
+
+        snprintf(buf, sizeof(buf), "PLAYER %d", p + 1);
+        text_spaced(bg, ui->font_small, 13 * s, ImVec2(cx, top), A(C_CYAN, 230), buf, 2.0f * s);
+        bg->AddRectFilled(ImVec2(cx, top + 16 * s), ImVec2(cx + 18 * s, top + 17.6f * s),
+                          A(C_CYAN, 70));
+
+        /* Live connection state (device view, not a cached flag). */
+        bg->AddCircleFilled(ImVec2(cx + 4 * s, top + 27 * s), 3.5f * s,
+                            live_name.empty() ? A(C_DIM, 210) : A(C_CYAN, 235));
+        if (!live_name.empty()) {
+            std::string shown = ellipsize(ui->font_body, 17 * s, live_name, colw - 18 * s);
+            text(bg, ui->font_body, 17 * s, ImVec2(cx + 14 * s, top + 18 * s), C_TEXT, shown.c_str());
+            snprintf(buf, sizeof(buf), "GUID %.32s", live_guid.c_str());
+            text(bg, ui->font_small, 11 * s, ImVec2(cx, top + 42 * s), A(C_MUTED, 215), buf);
+        } else {
+            text(bg, ui->font_body, 17 * s, ImVec2(cx + 14 * s, top + 18 * s),
+                 A(C_MUTED, 235), "NO PAD // KEYBOARD");
+            text(bg, ui->font_small, 11 * s, ImVec2(cx, top + 42 * s), A(C_DIM, 215),
+                 "plug in a controller to assign it");
+        }
+
+        /* Ruling 1: a stored but disconnected pad is shown explicitly, with the
+         * clear path spelled out, so the reservation policy is never silent. */
+        if (reserved) {
+            snprintf(buf, sizeof(buf), "P%d: RESERVED FOR", p + 1);
+            text(bg, ui->font_small, 12 * s, ImVec2(cx, top + 56 * s),
+                 A(C_MAGENTA, 245), buf);
+            text(bg, ui->font_small, 11 * s, ImVec2(cx, top + 70 * s),
+                 A(C_MAGENTA, 215), stored.c_str());
+            text(bg, ui->font_small, 11 * s, ImVec2(cx, top + 84 * s),
+                 A(C_MUTED, 225), "not connected - click PAD to reassign/clear");
+        }
+
+        /* Assignment chip: AUTO -> connected pads in order -> AUTO.  A reserved
+         * binding clears on the first click. */
+        {
+            int cur = -1;
+            std::string label = "AUTO";
+            const char *nextg = NULL;
+            if (!stored.empty()) {
+                for (int k = 0; k < devn; k++) {
+                    if (SDL_strcasecmp(dev[k].guid, stored.c_str()) == 0) { cur = k; break; }
+                }
+                label = (cur >= 0) ? ellipsize(ui->font_button, 13 * s, dev[cur].name, 198 * s)
+                                   : std::string("RESERVED");
+            }
+            if (stored.empty()) {
+                nextg = devn > 0 ? dev[0].guid : NULL;
+            } else if (cur >= 0) {
+                nextg = (cur + 1 < devn) ? dev[cur + 1].guid : NULL;
+            } else {
+                nextg = NULL; /* reserved -> clear (reassign on the next click) */
+            }
+            text(bg, ui->font_small, 12 * s, ImVec2(cx, top + 111 * s),
+                 A(C_MUTED, 225), "PAD ASSIGN");
+            {
+                ImVec2 cp(cx + colw - 210 * s, top + 102 * s);
+                char id[32];
+                snprintf(id, sizeof(id), "##assign%d", p);
+                if (binding_chip(ui, id, label.c_str(), cp, ImVec2(210 * s, 28 * s), s,
+                                 false, !stored.empty())) {
+                    const char *want = nextg ? nextg : "";
+                    bool unchanged = (want[0] == 0 && stored.empty()) ||
+                                     (want[0] && SDL_strcasecmp(want, stored.c_str()) == 0);
+                    if (!unchanged)
+                        apply_pad_assign(settings, p, want, changed);
+                }
+            }
+        }
+
+        /* 7-row rebind table: KEY writes key_map, PAD writes pad_map. */
+        {
+            float hdr = top + 140 * s;
+            text(bg, ui->font_small, 11 * s, ImVec2(cx, hdr), A(C_MUTED, 230), "ACTION");
+            text(bg, ui->font_small, 11 * s, ImVec2(cx + key_x + 8 * s, hdr),
+                 A(C_MUTED, 230), "KEY");
+            text(bg, ui->font_small, 11 * s, ImVec2(cx + pad_x + 8 * s, hdr),
+                 A(C_MUTED, 230), "PAD");
+        }
+
+        for (int a = 0; a < MW_IN_ACTIONS; a++) {
+            float ry = top + 158 * s + a * row_h;
+            bool wait_key = capturing && ui->cap_player == p && ui->cap_action == a && ui->cap_pad == 0;
+            bool wait_pad = capturing && ui->cap_player == p && ui->cap_action == a && ui->cap_pad == 1;
+            std::string kl = wait_key ? std::string("PRESS...")
+                                      : scancode_label(settings->key_map[p][a]);
+            std::string pl = wait_pad ? std::string("PRESS...")
+                                      : pad_button_label(settings->pad_map[p][a]);
+            char id[40];
+            ImVec2 kp(cx + key_x, ry);
+            ImVec2 pp(cx + pad_x, ry);
+            float pw_chip = colw - pad_x;
+
+            text(bg, ui->font_body, 16 * s, ImVec2(cx, ry + 3 * s), C_TEXT, k_action_names[a]);
+            snprintf(id, sizeof(id), "##key%d_%d", p, a);
+            if (binding_chip(ui, id, kl.c_str(), kp, ImVec2(key_w, chip_h), s,
+                             wait_key, settings->key_map[p][a] >= 0)) {
+                mw_input_begin_capture(p, a, 0);
+                ui->cap_player = p;
+                ui->cap_action = a;
+                ui->cap_pad = 0;
+            }
+            snprintf(id, sizeof(id), "##pad%d_%d", p, a);
+            if (binding_chip(ui, id, pl.c_str(), pp, ImVec2(pw_chip, chip_h), s,
+                             wait_pad, settings->pad_map[p][a] >= 0)) {
+                mw_input_begin_capture(p, a, 1);
+                ui->cap_player = p;
+                ui->cap_action = a;
+                ui->cap_pad = 1;
+            }
+        }
+    }
+
+    /* Capture banner.  Same strip is the permanent hint when idle. */
+    {
+        float by = py + 500 * s;
+        ImVec2 bp(px, by);
+        ImVec2 bsz(inner_w, 44 * s);
+        float pulse = 0.62f + 0.38f * sinf((float)ImGui::GetTime() * 4.0f);
+        bg->AddRectFilled(bp, ImVec2(bp.x + bsz.x, bp.y + bsz.y), IM_COL32(9, 6, 18, 225),
+                          9 * s);
+        bg->AddRect(bp, ImVec2(bp.x + bsz.x, bp.y + bsz.y),
+                    capturing ? A(C_MAGENTA, (int)(150 + 100 * pulse)) : A(C_CYAN, 55),
+                    9 * s, 0, capturing ? 1.6f : 1.0f);
+        if (capturing) {
+            char target[64];
+            snprintf(target, sizeof(target), "P%d  //  %s  //  %s",
+                     ui->cap_player + 1, k_action_names[ui->cap_action],
+                     ui->cap_pad ? "PAD" : "KEY");
+            /* The bundled fonts have no U+2026 glyph, so the prompt uses the
+             * ASCII three-dot form the panel's own ellipsize() uses. */
+            text(bg, ui->font_button, 18 * s, ImVec2(bp.x + 18 * s, by + 11 * s),
+                 A(IM_COL32(255, 200, 240, 255), (int)(170 + 85 * pulse)),
+                 "PRESS A KEY OR BUTTON...   (ESC CANCELS)");
+            {
+                ImVec2 ts = text_size(ui->font_button, 15 * s, target);
+                text(bg, ui->font_button, 15 * s,
+                     ImVec2(bp.x + bsz.x - 18 * s - ts.x, by + 13 * s), A(C_CYAN, 235), target);
+            }
+        } else {
+            text(bg, ui->font_small, 14 * s, ImVec2(bp.x + 18 * s, by + 14 * s),
+                 IM_COL32(174, 198, 216, 255),
+                 "CLICK A KEY OR PAD CHIP, THEN PRESS THE NEW BINDING.   ESC CANCELS.");
+        }
+    }
+
+    text(bg, ui->font_small, 13 * s, ImVec2(px, py + 560 * s),
+         IM_COL32(158, 182, 202, 255),
+         "P3 START shares the coin-3 bit (0x80); P3 BACK is unmapped by default.  "
+         "Bindings save to settings.ini.");
+
+    bg->AddRectFilled(ImVec2(px, py + 600 * s), ImVec2(px + inner_w, py + 601 * s),
+                      A(C_CYAN, 36));
+
+    if (neon_button(ui, "##ctlclose", "CLOSE",
+                    ImVec2(panel.x + pw - 38 * s - 210 * s, py + 618 * s),
+                    ImVec2(210 * s, 48 * s), BUTTON_PRIMARY, true, s))
+        *open = 0;
+    if (neon_button(ui, "##ctlsettings", "OPEN SETTINGS",
+                    ImVec2(px, py + 618 * s), ImVec2(210 * s, 48 * s),
+                    BUTTON_SECONDARY, true, s))
+        ui->tab = MW_UI_TAB_SETTINGS;
+    if (neon_button(ui, "##ctlx", "X", ImVec2(panel.x + pw - 54 * s, panel.y + 20 * s),
+                    ImVec2(32 * s, 32 * s), BUTTON_GHOST, true, s))
+        *open = 0;
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+
+    /* No capture may outlive the panel: closing it here disarms immediately,
+     * and the host repeats the disarm for closes it performs itself. */
+    if (!*open) mw_input_cancel_capture();
 }
 
 extern "C" void mw_ui_draw_fps(mw_ui *ui, float fps)

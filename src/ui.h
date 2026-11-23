@@ -29,6 +29,22 @@ void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
                          int in_game, int *reset_game, int *quit_game,
                          int *changed);
 
+/* Overlay navigation: the settings and controllers panels are tabs of the
+ * same overlay, and both draw the tab chips.  The host reads mw_ui_tab() and
+ * draws one panel per frame; it must also disarm input capture whenever the
+ * controllers panel is not the one being drawn (mw_input_cancel_capture). */
+#define MW_UI_TAB_SETTINGS    0
+#define MW_UI_TAB_CONTROLLERS 1
+int mw_ui_tab(mw_ui *ui);
+
+/* CONTROLLERS panel: live per-player pad state, the stored-GUID assignment
+ * row and the seven-action key/pad rebind table.  Clicking a key or pad chip
+ * starts a capture ("PRESS A KEY OR BUTTON...", ESC cancels); a captured or
+ * cleared binding is written through mw_input_save_maps() into *settings and
+ * *changed is set.  *open is cleared by the panel's own CLOSE/X buttons. */
+void mw_ui_draw_controllers(mw_ui *ui, mw_settings *settings, int *open,
+                            int *changed);
+
 void mw_ui_draw_fps(mw_ui *ui, float fps);
 
 #ifdef __cplusplus

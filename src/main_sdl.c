@@ -441,6 +441,10 @@ int main(int argc, char **argv)
     while (running) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            /* The rebinding capture belongs to the CONTROLLERS panel: while it
+             * waits, the panel owns the key that arrives, so the host hotkeys
+             * (F1/ESC/P/F5/F11/F12) must not also fire on it. */
+            int capture_busy = mw_input_capture_active();
             mw_ui_process_event(ui, &event);
             /* Hot-plug, binding capture and the pad's own buttons.  The
              * keyboard state is fed through mw_input_set_keyboard() below so
@@ -451,6 +455,7 @@ int main(int argc, char **argv)
                 running = 0;
                 break;
             case SDL_KEYDOWN:
+                if (capture_busy) break;
                 key_state[event.key.keysym.scancode] = 1;
                 key_latch[event.key.keysym.scancode] = 1;
                 mw_input_set_keyboard(event.key.keysym.scancode, 1, 1);
@@ -542,8 +547,11 @@ int main(int argc, char **argv)
         int was_open = settings_open;
         if (settings_open) {
             int reset_request = 0, quit_request = 0, changed = 0;
-            mw_ui_draw_settings(ui, &g_settings, &settings_open, 1,
-                                &reset_request, &quit_request, &changed);
+            if (mw_ui_tab(ui) == MW_UI_TAB_CONTROLLERS)
+                mw_ui_draw_controllers(ui, &g_settings, &settings_open, &changed);
+            else
+                mw_ui_draw_settings(ui, &g_settings, &settings_open, 1,
+                                    &reset_request, &quit_request, &changed);
             if (changed) settings_dirty = 1;
             if (reset_request) {
                 mw_m68k_reset(&machine);
@@ -551,6 +559,11 @@ int main(int argc, char **argv)
             }
             if (quit_request) running = 0;
         }
+        /* Ruling: no capture outlives the panel.  This single cover handles
+         * F1/ESC/X, the CLOSE button, a tab switch and the launcher handing
+         * the window to mwalk.exe. */
+        if (!(settings_open && mw_ui_tab(ui) == MW_UI_TAB_CONTROLLERS))
+            mw_input_cancel_capture();
         if (was_open && !settings_open)
             settings_dirty = 1;
         mw_ui_end(ui);

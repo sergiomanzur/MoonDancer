@@ -75,6 +75,14 @@ void mw_input_assign(const char *guid, int player);
  * persists it for the caller. */
 void mw_input_begin_capture(int player, int action, int pad);
 int  mw_input_capture_result(int *code);  /* 0 waiting, 1 captured, -1 cancel */
+/* Disarms a waiting capture and forgets the last answer.  Panels call this
+ * when they close or lose focus, so no capture ever outlives the UI that
+ * armed it (a later mw_input_capture_result() then reports 0 again). */
+void mw_input_cancel_capture(void);
+/* 1 while begin_capture() waits for its key/button.  The host uses it to
+ * keep its own hotkeys (F1/ESC/P/...) from firing mid-capture, since the
+ * module cannot consume an event before the host sees it. */
+int  mw_input_capture_active(void);
 
 /* Keyboard feeding.  down=0/1 updates the held state, latch!=0 marks the
  * key as tapped this frame (a press+release inside one frame still counts).
