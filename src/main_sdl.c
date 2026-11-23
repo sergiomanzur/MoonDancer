@@ -23,6 +23,7 @@
 #include "sound.h"
 #include "mcu.h"
 #include "settings.h"
+#include "input.h"
 #include "ui.h"
 #include "zip_loader.h"
 #ifdef _WIN32
@@ -33,6 +34,7 @@
 
 static uint8_t key_state[SDL_NUM_SCANCODES];
 static uint8_t key_latch[SDL_NUM_SCANCODES];
+static mw_input_result g_input; /* keyboard + 3 pads, refreshed every frame */
 static int g_demo;
 static uint8_t g_dsw = 0xFD;
 static s18_audio_t *g_sdl_audio;
@@ -90,6 +92,22 @@ static int pressed(SDL_Scancode code)
     return key_state[code] != 0 || key_latch[code] != 0;
 }
 
+/* The input module reports MW_IN_* action bits; the machine wants the S18
+ * port layout (active-low): LEFT 0x80 RIGHT 0x40 UP 0x20 DOWN 0x10
+ * B1 0x01 B2 0x02 B3 0x04. */
+static uint8_t game_action_bits(uint8_t actions)
+{
+    uint8_t bits = 0;
+    if (actions & MW_IN_LEFT)  bits |= 0x80;
+    if (actions & MW_IN_RIGHT) bits |= 0x40;
+    if (actions & MW_IN_UP)    bits |= 0x20;
+    if (actions & MW_IN_DOWN)  bits |= 0x10;
+    if (actions & MW_IN_B1)    bits |= 0x01;
+    if (actions & MW_IN_B2)    bits |= 0x02;
+    if (actions & MW_IN_B3)    bits |= 0x04;
+    return bits;
+}
+
 static void update_inputs(s18_t *m)
 {
     s18_inputs_t in = m->inputs;
@@ -97,35 +115,18 @@ static void update_inputs(s18_t *m)
     in.service = 0xFF;
     in.coinage = 0xFF;
     in.dsw = g_dsw;
-    /* Player 1: arrows, Z/X/C */
-    if (pressed(SDL_SCANCODE_LEFT))  in.p1 &= (uint8_t)~0x80;
-    if (pressed(SDL_SCANCODE_RIGHT)) in.p1 &= (uint8_t)~0x40;
-    if (pressed(SDL_SCANCODE_UP))    in.p1 &= (uint8_t)~0x20;
-    if (pressed(SDL_SCANCODE_DOWN))  in.p1 &= (uint8_t)~0x10;
-    if (pressed(SDL_SCANCODE_Z))     in.p1 &= (uint8_t)~0x01;
-    if (pressed(SDL_SCANCODE_X))     in.p1 &= (uint8_t)~0x02;
-    if (pressed(SDL_SCANCODE_C))     in.p1 &= (uint8_t)~0x04;
 
-    /* Player 2: WASD, J/K/L */
-    if (pressed(SDL_SCANCODE_A))     in.p2 &= (uint8_t)~0x80;
-    if (pressed(SDL_SCANCODE_D))     in.p2 &= (uint8_t)~0x40;
-    if (pressed(SDL_SCANCODE_W))     in.p2 &= (uint8_t)~0x20;
-    if (pressed(SDL_SCANCODE_S))     in.p2 &= (uint8_t)~0x10;
-    if (pressed(SDL_SCANCODE_J))     in.p2 &= (uint8_t)~0x01;
-    if (pressed(SDL_SCANCODE_K))     in.p2 &= (uint8_t)~0x02;
-    if (pressed(SDL_SCANCODE_L))     in.p2 &= (uint8_t)~0x04;
+    /* g_input already holds the merged keyboard + pad state for all three
+     * players (see src/input.h): a single mapper, no per-device branches. */
+    in.p1 &= (uint8_t)~game_action_bits(g_input.actions[0]);
+    in.p2 &= (uint8_t)~game_action_bits(g_input.actions[1]);
+    in.p3 &= (uint8_t)~game_action_bits(g_input.actions[2]);
 
-    /* Player 3: keypad 8/4/6/2, 1/2/3 */
-    if (pressed(SDL_SCANCODE_KP_4))  in.p3 &= (uint8_t)~0x80;
-    if (pressed(SDL_SCANCODE_KP_6))  in.p3 &= (uint8_t)~0x40;
-    if (pressed(SDL_SCANCODE_KP_8))  in.p3 &= (uint8_t)~0x20;
-    if (pressed(SDL_SCANCODE_KP_2))  in.p3 &= (uint8_t)~0x10;
-    if (pressed(SDL_SCANCODE_KP_1))  in.p3 &= (uint8_t)~0x01;
-    if (pressed(SDL_SCANCODE_KP_2))  in.p3 &= (uint8_t)~0x02;
-    if (pressed(SDL_SCANCODE_KP_3))  in.p3 &= (uint8_t)~0x04;
-    if (pressed(SDL_SCANCODE_KP_0))  in.p3 &= (uint8_t)~0x08;
-
-    /* Service / coins / starts */
+    /* Service: the pads contribute start/coin bits; the keyboard's service
+     * keys keep their original layout untouched. */
+    in.service &= (uint8_t)~(g_input.start[0] | g_input.coin[0] |
+                             g_input.start[1] | g_input.coin[1] |
+                             g_input.start[2] | g_input.coin[2]);
     if (pressed(SDL_SCANCODE_5))  in.service &= (uint8_t)~0x01;
     if (pressed(SDL_SCANCODE_6))  in.service &= (uint8_t)~0x02;
     if (pressed(SDL_SCANCODE_7))  in.service &= (uint8_t)~0x08;
@@ -297,6 +298,11 @@ int main(int argc, char **argv)
     if (cli_display >= 0 && cli_display < MW_DISPLAY_COUNT)
         g_settings.display_mode = cli_display;
 
+    /* Input: open up to three controllers and load the per-player maps.
+     * The module owns gamepad hot-plug and binding capture from here on. */
+    mw_input_init();
+    mw_input_load_maps(&g_settings);
+
     /* Sound follows the saved setting (on by default); --audio and MW_AUDIO
      * stay force-on overrides and win over the panel toggle. */
     const int audio_forced = cli_audio || getenv("MW_AUDIO") != NULL;
@@ -436,6 +442,10 @@ int main(int argc, char **argv)
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             mw_ui_process_event(ui, &event);
+            /* Hot-plug, binding capture and the pad's own buttons.  The
+             * keyboard state is fed through mw_input_set_keyboard() below so
+             * the module and its harness share one merge path. */
+            mw_input_process_event(&event);
             switch (event.type) {
             case SDL_QUIT:
                 running = 0;
@@ -443,6 +453,7 @@ int main(int argc, char **argv)
             case SDL_KEYDOWN:
                 key_state[event.key.keysym.scancode] = 1;
                 key_latch[event.key.keysym.scancode] = 1;
+                mw_input_set_keyboard(event.key.keysym.scancode, 1, 1);
                 if (event.key.repeat) break;
                 if (event.key.keysym.scancode == SDL_SCANCODE_1 ||
                     event.key.keysym.scancode == SDL_SCANCODE_2 ||
@@ -481,11 +492,17 @@ int main(int argc, char **argv)
                 break;
             case SDL_KEYUP:
                 key_state[event.key.keysym.scancode] = 0;
+                mw_input_set_keyboard(event.key.keysym.scancode, 0, 0);
                 break;
             default:
                 break;
             }
         }
+
+        /* Refresh the merged keyboard + pad state once per frame, even while
+         * paused or in the panel, so the one-frame tap latch drains and no
+         * press leaks into the first frame after resuming. */
+        mw_input_poll(&g_input);
 
         if (!paused && !settings_open) {
             update_inputs(&machine);
@@ -599,6 +616,7 @@ int main(int argc, char **argv)
     mw_ui_destroy(ui);
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
+    mw_input_shutdown();
     SDL_Quit();
     if (nvram_on)
         s18_save_nvram(&machine, nvram);
