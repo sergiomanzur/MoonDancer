@@ -57,11 +57,11 @@ The overlay is shared by the launcher (SETTINGS) and the game (F1):
 - **DISPLAY** -- 4:3 ORIGINAL / 16:9 / 16:10 / 21:9 (see below).
 - **VIDEO** -- FULLSCREEN; **SHADER** preset **OFF / SCANLINES / CRT** with
   **SCANLINE INTENSITY** (0-100%); **RESOLUTION** presets 1280x720,
-  1600x900, 1920x1080 and 2560x1440, applied to the window immediately (in
-  fullscreen the desktop size wins); and INTEGER SCALING. Shader presets run
-  in source space, so every emulated line gets exactly one scanline at any
-  window size: OFF is a byte-exact no-op, SCANLINES darkens alternate lines,
-  CRT adds a vertical aperture grille.
+  1600x900, 1920x1080 and 2560x1440, applied immediately when the game is
+  running (in fullscreen the desktop size wins); and INTEGER SCALING. Shader
+  presets run in source space, so every emulated line gets exactly one
+  scanline at any window size: OFF is a byte-exact no-op, SCANLINES darkens
+  alternate lines, CRT adds a vertical aperture grille.
 - **INTERFACE** -- SHOW FPS.
 - **CONTROLLERS** -- the gamepad panel described below.
 
@@ -101,8 +101,8 @@ Working:
   against an independent re-implementation: transparent pixels consume a
   screen column, so zoomed sprites no longer shear or wobble.
 - Keyboard input for 1–3 players, plus up to three SDL game controllers
-  (auto-assigned to 1P/2P/3P, with full remapping); coins, starts and
-  service; coin/start flow reaches actual gameplay.
+  (auto-assigned to 1P/2P/3P, with remappable directions and buttons);
+  coins, starts and service; coin/start flow reaches actual gameplay.
 - Coin/start flow verified against MAME: the service-port coin edge is
   latched, credits increment at `$E000`, the start press consumes a credit,
   and the post-start mode byte `$E036` matches MAME (`0x18`). Tile RAM and
@@ -272,11 +272,11 @@ Default pad mapping (identical for all three players):
 | Move | D-pad or left stick |
 | B1 / B2 / B3 | A / B / X |
 | Start | that player's start |
-| Back | that player's coin (1P: coin 1, 2P: coin 2) |
+| Back | that player's coin (1P: coin 1, 2P: coin 2; unused for 3P) |
 
 - P3's start and coin 3 share one service bit (0x80) on the board, so 3P's
-  pad Start fires it and 3P's pad Back is unbound by default. It can be bound
-  in CONTROLLERS, but it fires the same shared bit.
+  pad Start fires it. P3's pad Back is unused: coin 3 does not exist in the
+  pad service layout, and Back is not one of the rebindable actions.
 - Pads of the same model report the same GUID, so two identical controllers
   cannot be told apart by the assignment row; they fall back to connection
   order.
@@ -289,7 +289,7 @@ Default pad mapping (identical for all three players):
 Open the in-game overlay with **F1** and select the **CHEATS** panel. The
 four cheats are global (they cover 1P, 2P and 3P), session-only, applied to
 work RAM after every frame, never written to `settings.ini`, and cleared by
-**F5** or a reboot:
+**F5** or when the game exits:
 
 - **INFINITE LIVES** -- freezes each active player's lives so the counter
   never runs out.
