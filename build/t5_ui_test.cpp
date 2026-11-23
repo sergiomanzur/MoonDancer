@@ -18,6 +18,11 @@
  *                  and the current folder are selectable, other files are not,
  *                  and the D-pad + A reach a row with no mouse event
  *
+ *   mode browse drives mw_ui_file_browser() directly; the host picker contract
+ *   that decides whether the launcher opens this panel at all (1 = a native
+ *   picker handled the flow, 0 = declined) lives in host_port.c and is checked
+ *   live: Windows BROWSE + cancel must leave the launcher card in place.
+ *
  * Build (from the repo root, after `cmake --build build` refreshed the libs):
  *   g++ -std=c++17 -O2 -I src -I third_party/imgui -I third_party/imgui/backends
  *       -I third_party/stb
@@ -694,6 +699,9 @@ static void fb_open(const char *dir)
 
 static void run_browse(void)
 {
+    /* The panel is driven directly: the launcher wiring (native picker handled
+     * = 1 → panel stays closed; declined = 0 → panel opens) is host policy,
+     * verified live on Windows by BROWSE + cancel showing no panel. */
     g_launcher = 0;
     g_open = 0;
     make_fixtures();

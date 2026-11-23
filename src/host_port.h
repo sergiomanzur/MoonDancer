@@ -22,8 +22,11 @@ void mw_host_extract_assets(void);
  * the launcher calls it directly and owns SDL_Init/SDL_Quit. Returns 0 on a
  * clean exit, non-zero on a startup failure. */
 int mw_game_main(int argc, char **argv);
-/* 1 = a native dialog filled out[cap] (Windows GetOpenFileNameW, verbatim
- * current behavior). 0 = host declined: caller opens the in-UI browser. */
+/* 1 = a native picker handled the browse flow: Windows GetOpenFileNameW was
+ * shown and out[cap] is filled on success, left untouched on cancel. 0 = host
+ * declined: caller opens the in-UI browser.  Android's SAF picker (Task 8/9)
+ * uses the same 1 = handled contract, with the chosen path delivered later as an
+ * SDL_DROPFILE event. */
 int mw_host_browse_archive(SDL_Window *window, char *out, int cap);
 /* Launch the game; blocks until it exits, returns its exit code.
  * Windows: current CreateProcessW + AllowSetForegroundWindow, hidden-after-

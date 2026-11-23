@@ -94,8 +94,11 @@ static HWND window_hwnd(SDL_Window *window)
 }
 #endif
 
-/* Native archive picker.  Windows keeps the shipped GetOpenFileNameW dialog;
- * the other hosts decline (0) so the launcher can open its in-UI browser. */
+/* Native archive picker.  The return value reports whether the browse flow was
+ * handled, not whether a file was picked: 1 = a native picker was shown (out is
+ * filled on success and left untouched on cancel); 0 = this host has no native
+ * picker, so the launcher opens its in-UI browser.  Windows always handles the
+ * flow, which is what keeps it native-only (a cancelled dialog does nothing). */
 int mw_host_browse_archive(SDL_Window *window, char *out, int cap)
 {
 #ifdef _WIN32
@@ -113,13 +116,16 @@ int mw_host_browse_archive(SDL_Window *window, char *out, int cap)
     ofn.lpstrTitle = L"Select the Moonwalker ROM archive";
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&ofn)) {
-        /* Claim filled only when the UTF-8 conversion actually wrote out: a
-         * short cap leaves out untouched, and the launcher must then fall back
-         * to its in-UI browser rather than trust a stale path. */
-        int n = WideCharToMultiByte(CP_UTF8, 0, file, -1, out, cap, NULL, NULL);
-        return n > 0;
+        /* Convert before touching out: on a conversion failure, or when the
+         * caller's buffer is too small, out stays untouched so the launcher
+         * adopts nothing and never trusts a half-written path. */
+        char converted[2048];
+        int n = WideCharToMultiByte(CP_UTF8, 0, file, -1, converted,
+                                    (int)sizeof(converted), NULL, NULL);
+        if (n > 0 && n <= cap)
+            memcpy(out, converted, (size_t)n);
     }
-    return 0;
+    return 1;
 #else
     (void)window;
     (void)out;
