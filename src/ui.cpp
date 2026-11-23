@@ -58,6 +58,9 @@ struct mw_ui {
     int cap_pad;
     /* MW_UI_CAP_* bits the host declared for this environment. */
     int caps;
+    /* Live floating-stick landing point; valid only while the host says so. */
+    float touch_anchor_x, touch_anchor_y;
+    int touch_anchor_valid;
 };
 
 namespace {
@@ -794,6 +797,9 @@ extern "C" mw_ui *mw_ui_create(SDL_Window *window, SDL_Renderer *renderer,
     ui->cap_action = -1;
     ui->cap_pad = 0;
     ui->caps = 0;
+    ui->touch_anchor_x = 0.0f;
+    ui->touch_anchor_y = 0.0f;
+    ui->touch_anchor_valid = 0;
 
     int ww = 0, wh = 0, ow = 0, oh = 0;
     SDL_GetWindowSize(window, &ww, &wh);
@@ -2019,17 +2025,23 @@ void touch_dpad(ImDrawList *dl, float W, float H, float s, uint8_t actions)
 }
 
 /* Floating stick.  The module anchors the stick wherever the thumb lands and
- * reports only the offset in the frame state (stick_x/stick_y), so the draw
- * pass shows it at the left-thumb rest anchor with that offset applied; the
- * dead-zone circumference is drawn so the player can see where movement
- * starts.  Before the first touch the ring is drawn dim at rest, which also
- * keeps the thumb area visible on the very first frame. */
-void touch_stick(ImDrawList *dl, float W, float H, float s, const mw_touch_state *t)
+ * reports only the offset in the frame state (stick_x/stick_y), so the host
+ * passes the landing point through mw_ui_touch_stick_anchor().  While a stick
+ * finger is live the ring sits exactly on that point and the knob applies the
+ * reported offset from it; before the first touch (or when the host has no
+ * live anchor) the ring is drawn dim at the documented rest position, which
+ * also keeps the thumb area visible on the very first frame.  The dead-zone
+ * circumference is drawn so the player can see where movement starts. */
+void touch_stick(mw_ui *ui, ImDrawList *dl, float W, float H, float s,
+                 const mw_touch_state *t)
 {
+    /* Rest position used only while no anchored stick is active. */
     ImVec2 a(0.135f * W, 0.790f * H);
     float rx = MW_TOUCH_STICK_RX * W, ry = MW_TOUCH_STICK_RY * H;
     float r = (rx + ry) * 0.5f;
     int active = t->stick_finger >= 0;
+    if (active && ui->touch_anchor_valid)
+        a = ImVec2(ui->touch_anchor_x * W, ui->touch_anchor_y * H);
     ImVec2 knob(active ? a.x + t->stick_x * rx : a.x,
                 active ? a.y + t->stick_y * ry : a.y);
 
@@ -2114,6 +2126,18 @@ extern "C" void mw_ui_set_caps(mw_ui *ui, int caps)
     if (ui) ui->caps = caps;
 }
 
+extern "C" void mw_ui_touch_stick_anchor(mw_ui *ui, float ax, float ay)
+{
+    if (!ui) return;
+    if (ax < 0.0f || ay < 0.0f) {
+        ui->touch_anchor_valid = 0;
+        return;
+    }
+    ui->touch_anchor_x = ax;
+    ui->touch_anchor_y = ay;
+    ui->touch_anchor_valid = 1;
+}
+
 extern "C" void mw_ui_draw_touch(mw_ui *ui, const mw_touch_state *t, int enabled, int mode)
 {
     if (!ui) return;
@@ -2141,7 +2165,7 @@ extern "C" void mw_ui_draw_touch(mw_ui *ui, const mw_touch_state *t, int enabled
     if (mode == MW_TOUCH_DPAD)
         touch_dpad(dl, W, H, s, t->actions);
     else
-        touch_stick(dl, W, H, s, t);
+        touch_stick(ui, dl, W, H, s, t);
 
     touch_action_button(ui, dl, W, H, s, MW_TOUCH_B1_X0, MW_TOUCH_B1_Y0,
                         MW_TOUCH_B1_X1, MW_TOUCH_B1_Y1,

@@ -563,6 +563,12 @@ int mw_game_main(int argc, char **argv)
         if (force && force[0] && strcmp(force, "0") != 0)
             touch_capable = 1;
     }
+    /* Landing point of the floating stick's owning thumb (normalized window
+     * coordinates).  The touch module anchors at the finger but its frozen
+     * state carries only the offset, so the host remembers the landing DOWN
+     * and hands it to the draw pass; -1/invalid means "no live anchor". */
+    float touch_anchor_x = 0.0f, touch_anchor_y = 0.0f;
+    int touch_anchor_valid = 0;
 
     while (running) {
         SDL_Event event;
@@ -642,10 +648,21 @@ int mw_game_main(int argc, char **argv)
                  * not a window-system one. */
                 mw_touch_finger(1, event.tfinger.x, event.tfinger.y,
                                 (int)event.tfinger.fingerId, &g_touch);
+                /* A DOWN that made this finger the stick's owner is the
+                 * landing point; motion never re-anchors, and a finger the
+                 * module ignored leaves the existing anchor alone. */
+                if (event.type == SDL_FINGERDOWN &&
+                    g_touch.stick_finger == (int)event.tfinger.fingerId) {
+                    touch_anchor_x = event.tfinger.x;
+                    touch_anchor_y = event.tfinger.y;
+                    touch_anchor_valid = 1;
+                }
                 break;
             case SDL_FINGERUP:
                 mw_touch_finger(0, event.tfinger.x, event.tfinger.y,
                                 (int)event.tfinger.fingerId, &g_touch);
+                if (g_touch.stick_finger < 0)
+                    touch_anchor_valid = 0;
                 break;
             default:
                 break;
@@ -670,6 +687,9 @@ int mw_game_main(int argc, char **argv)
             mw_touch_set(g_settings.touch_on, g_settings.touch_mode);
             applied_touch_on = g_settings.touch_on;
             applied_touch_mode = g_settings.touch_mode;
+            /* mw_touch_set() forgets every finger in progress, so any anchor
+             * from the previous configuration is stale. */
+            touch_anchor_valid = 0;
         }
         mw_touch_frame(&g_touch);
         /* MENU invariant, enforced in one place.  The pump latches MENU
@@ -790,14 +810,23 @@ int mw_game_main(int argc, char **argv)
             mw_input_cancel_capture();
         if (was_open && !settings_open)
             settings_dirty = 1;
-        /* The touch layer is submitted every frame.  enabled mirrors the
-         * capability gate: with a touch-capable host and touch_on=0 it still
-         * draws the MENU button + "TOUCH HIDDEN" hint (the escape hatch), and
-         * a host without touch draws nothing at all.  Called after the panels,
-         * but on the background draw list, so it can never cover the overlay:
-         * the overlay stays the topmost layer whenever it is open. */
-        mw_ui_draw_touch(ui, &g_touch, touch_capable ? g_settings.touch_on : 0,
-                         g_settings.touch_mode);
+        /* The touch layer is submitted only on a touch-capable host.  A host
+         * with no touch device has no way to tap MENU either (the latch is
+         * zeroed above), so drawing the HUD there would be a permanent dead
+         * control on every desktop -- capability, not touch_on, decides
+         * whether the layer exists at all.  Within a capable host, enabled
+         * mirrors touch_on: 0 still draws the MENU button + "TOUCH HIDDEN"
+         * hint (the escape hatch).  Called after the panels, but on the
+         * background draw list, so it can never cover the overlay: the overlay
+         * stays the topmost layer whenever it is open.  The anchor is handed
+         * over every frame; a negative pair means no live stick. */
+        if (touch_capable) {
+            mw_ui_touch_stick_anchor(ui,
+                                     touch_anchor_valid ? touch_anchor_x : -1.0f,
+                                     touch_anchor_valid ? touch_anchor_y : -1.0f);
+            mw_ui_draw_touch(ui, &g_touch, g_settings.touch_on,
+                             g_settings.touch_mode);
+        }
         mw_ui_end(ui);
         SDL_RenderPresent(renderer);
 

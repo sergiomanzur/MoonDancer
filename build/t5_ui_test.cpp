@@ -21,10 +21,13 @@
  *                  and the current folder are selectable, other files are not,
  *                  and the D-pad + A reach a row with no mouse event
  *   touch  <ini>   Task 7 touch layer: with enabled=0 only the MENU button
- *                  draws (vertex-zone assertions), enabled=1 draws the stick /
- *                  D-pad, the three icon buttons and the service chips;
- *                  MW_UI_CAP_NO_RESOLUTION hides the RESOLUTION row; the
- *                  launcher and CONTROLLERS toggles flip settings + persist
+ *                  draws (vertex-zone assertions in every control rect),
+ *                  enabled=1 draws the stick / D-pad, the three icon buttons
+ *                  and the service chips; a non-touch host draws zero touch
+ *                  vertices; the floating stick centers on the landing point
+ *                  supplied by mw_ui_touch_stick_anchor(); the capability flag
+ *                  hides the RESOLUTION row; the launcher and CONTROLLERS
+ *                  toggles flip settings + persist
  *
  *   mode browse drives mw_ui_file_browser() directly; the host picker contract
  *   that decides whether the launcher opens this panel at all (1 = a native
@@ -988,6 +991,51 @@ static void touch_frame(const mw_touch_state *t, int enabled, int mode)
     render_analysis_frame();
 }
 
+/* Same frame, with the live floating-stick landing point supplied. */
+static void touch_frame_anchor(const mw_touch_state *t, int enabled, int mode,
+                               float ax, float ay)
+{
+    mw_ui_begin(g_ui);
+    mw_ui_touch_stick_anchor(g_ui, ax, ay);
+    mw_ui_draw_touch(g_ui, t, enabled, mode);
+    render_analysis_frame();
+}
+
+/* Mirrors a non-touch host: main_sdl.c does not call mw_ui_draw_touch at all
+ * when SDL_GetNumTouchDevices() == 0 (and the MENU latch is dead there), so the
+ * frame must contain no touch geometry anywhere. */
+static void no_capability_frame(void)
+{
+    mw_ui_begin(g_ui);
+    render_analysis_frame();
+}
+
+static int zone_centroid(float nx0, float ny0, float nx1, float ny1,
+                         float *cx, float *cy)
+{
+    const float W = 1280.0f, H = 720.0f;
+    int n = 0;
+    double sx = 0.0, sy = 0.0;
+    if (!g_dd) return 0;
+    for (int l = 0; l < g_dd->CmdListsCount; l++) {
+        const ImDrawList *dl = g_dd->CmdLists[l];
+        for (int v = 0; v < dl->VtxBuffer.Size; v++) {
+            const ImVec2 &p = dl->VtxBuffer[v].pos;
+            if (p.x >= nx0 * W && p.x <= nx1 * W &&
+                p.y >= ny0 * H && p.y <= ny1 * H) {
+                sx += p.x;
+                sy += p.y;
+                n++;
+            }
+        }
+    }
+    if (n > 0) {
+        *cx = (float)(sx / n);
+        *cy = (float)(sy / n);
+    }
+    return n;
+}
+
 static int zone_vertices(float nx0, float ny0, float nx1, float ny1)
 {
     const float W = 1280.0f, H = 720.0f;
@@ -1027,6 +1075,29 @@ static void run_touch(void)
           "enabled=0 leaves the left control zone empty");
     check(zone_vertices(0.74f, 0.54f, 1.0f, 1.0f) == 0,
           "enabled=0 leaves the right control zone empty");
+    /* Minor #4: the two half-window zones miss the service chips and the
+     * action rects, so hidden means hidden in every control rect. */
+    check(zone_vertices(MW_TOUCH_COIN_X0, MW_TOUCH_COIN_Y0,
+                        MW_TOUCH_COIN_X1, MW_TOUCH_COIN_Y1) == 0,
+          "enabled=0 leaves the coin chip empty");
+    check(zone_vertices(MW_TOUCH_START_X0, MW_TOUCH_START_Y0,
+                        MW_TOUCH_START_X1, MW_TOUCH_START_Y1) == 0,
+          "enabled=0 leaves the 1P START chip empty");
+    check(zone_vertices(MW_TOUCH_B1_X0, MW_TOUCH_B1_Y0,
+                        MW_TOUCH_B1_X1, MW_TOUCH_B1_Y1) == 0,
+          "enabled=0 leaves the punch button empty");
+    check(zone_vertices(MW_TOUCH_B2_X0, MW_TOUCH_B2_Y0,
+                        MW_TOUCH_B2_X1, MW_TOUCH_B2_Y1) == 0,
+          "enabled=0 leaves the jump button empty");
+    check(zone_vertices(MW_TOUCH_B3_X0, MW_TOUCH_B3_Y0,
+                        MW_TOUCH_B3_X1, MW_TOUCH_B3_Y1) == 0,
+          "enabled=0 leaves the magic button empty");
+
+    /* ---- non-touch host: no HUD at all (Critical fix) ---- */
+    g_pending_shot = "t9_nocap";
+    no_capability_frame();
+    check(zone_vertices(0.0f, 0.0f, 1.0f, 1.0f) == 0,
+          "a host without touch capability draws zero touch vertices");
 
     /* ---- full layer, stick mode, every control and latch lit ---- */
     t.actions = MW_IN_B1 | MW_IN_B2 | MW_IN_B3 | MW_IN_UP | MW_IN_RIGHT;
@@ -1077,6 +1148,47 @@ static void run_touch(void)
     touch_frame(&t, 1, MW_TOUCH_STICK);
     check(zone_vertices(0.0f, 0.60f, 0.30f, 1.0f) > 0,
           "the dormant stick ring is drawn before the first touch");
+
+    /* ---- floating stick follows the thumb's landing point (Important) ---- */
+    {
+        const float ax = 0.300f, ay = 0.720f;
+        float cx = 0.0f, cy = 0.0f, dx, dy, adx, ady;
+        int n;
+        memset(&t, 0, sizeof(t));
+        t.stick_finger = 5;             /* thumb owns the stick, centred */
+        g_pending_shot = "t10_stick_anchor";
+        touch_frame_anchor(&t, 1, MW_TOUCH_STICK, ax, ay);
+        /* Zone around the landing point, clear of the coin chip (x >= 0.395)
+         * and the right-half buttons. */
+        n = zone_centroid(0.20f, 0.55f, 0.39f, 0.95f, &cx, &cy);
+        dx = cx - ax * 1280.0f;
+        dy = cy - ay * 720.0f;
+        adx = dx < 0.0f ? -dx : dx;
+        ady = dy < 0.0f ? -dy : dy;
+        printf("stick anchor centroid (%.1f,%.1f), landing (%.1f,%.1f)\n",
+               cx, cy, ax * 1280.0f, ay * 720.0f);
+        check(n > 0, "the live anchor draws the stick at the landing point");
+        check(adx < 6.0f && ady < 6.0f,
+              "the stick ring centers on the finger landing point");
+        check(cx > 0.25f * 1280.0f,
+              "the ring is not still painted at the old rest position");
+        /* Clearing the anchor restores the documented rest position. */
+        mw_ui_touch_stick_anchor(g_ui, -1.0f, -1.0f);
+        memset(&t, 0, sizeof(t));
+        t.stick_finger = 6;
+        g_pending_shot = "t11_stick_rest";
+        touch_frame(&t, 1, MW_TOUCH_STICK);
+        n = zone_centroid(0.02f, 0.60f, 0.24f, 0.95f, &cx, &cy);
+        check(n > 0, "without a live anchor the stick falls back to rest");
+        printf("rest centroid (%.1f,%.1f), expected (%.1f,%.1f)\n",
+               cx, cy, 0.135f * 1280.0f, 0.790f * 720.0f);
+        dx = cx - 0.135f * 1280.0f;
+        dy = cy - 0.790f * 720.0f;
+        adx = dx < 0.0f ? -dx : dx;
+        ady = dy < 0.0f ? -dy : dy;
+        check(adx < 6.0f && ady < 6.0f,
+              "the cleared anchor puts the ring back at the rest position");
+    }
 
     /* ---- capability flags: the RESOLUTION preset row ---- */
     g_open = 1;

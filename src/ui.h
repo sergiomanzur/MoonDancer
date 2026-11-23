@@ -78,11 +78,22 @@ void mw_ui_draw_cheats(mw_ui *ui, mw_cheats *cheats, int *open);
 
 void mw_ui_draw_fps(mw_ui *ui, float fps);
 
+/* Live landing point of the floating stick's owning thumb, in SDL's normalized
+ * window coordinates (the same space as SDL_FINGER* and touch_controls.h).
+ * The touch module anchors the stick where the finger lands but its frozen
+ * state carries only the offset, so the host supplies the anchor here: call it
+ * before mw_ui_draw_touch() on every frame that has a live anchor.  Pass any
+ * negative coordinate to clear it; the draw pass then falls back to its
+ * documented rest position while no stick is active. */
+void mw_ui_touch_stick_anchor(mw_ui *ui, float ax, float ay);
+
 /* On-screen touch controls.  Call once per frame in the game loop, after the
  * overlay panels (the layer uses the background draw list, so it stays under
- * the panel windows no matter when it is submitted).
+ * the panel windows no matter when it is submitted), and only when the host is
+ * touch-capable -- a host that cannot receive finger events must not draw a
+ * HUD it cannot use.
  *
- * enabled mirrors the host's capability gate: non-zero draws the full layer
+ * enabled mirrors the host's user setting: non-zero draws the full layer
  * (D-pad/floating stick, the three action buttons, the coin and 1P START
  * chips); zero draws only the MENU pause-bars button and a short "TOUCH
  * HIDDEN" hint, because MENU is the escape hatch back to the toggle and must
