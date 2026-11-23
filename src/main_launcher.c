@@ -22,6 +22,7 @@
 #include "settings.h"
 #include "input.h"
 #include "ui.h"
+#include "launcher_music.h"
 
 static int file_exists(const char *p)
 {
@@ -283,7 +284,11 @@ int main(int argc, char **argv)
     int running = 1;
     int settings_open = start_settings;
     int settings_dirty = 0;
+    int music_playing = 0;
     Uint32 last_save = 0;
+
+    if (settings.music_on)
+        music_playing = mw_music_start();
 
     while (running) {
         int browse = 0, start = 0, open_settings = 0, quit = 0;
@@ -325,7 +330,7 @@ int main(int argc, char **argv)
         mw_ui_begin(ui);
         if (!settings_open)
             mw_ui_draw_launcher(ui, &settings, archive, archive_status(archive),
-                                &browse, &start, &open_settings, &quit);
+                                &browse, &start, &open_settings, &quit, &changed);
         if (settings_open) {
             if (mw_ui_tab(ui) == MW_UI_TAB_CONTROLLERS)
                 mw_ui_draw_controllers(ui, &settings, &settings_open, &changed);
@@ -345,6 +350,14 @@ int main(int argc, char **argv)
             browse = start = quit = 0;
         }
         if (changed) settings_dirty = 1;
+        /* The launcher's MUSIC toggle writes straight through to settings;
+         * follow it immediately instead of waiting for the next run. */
+        if (settings.music_on && !music_playing)
+            music_playing = mw_music_start();
+        else if (!settings.music_on && music_playing) {
+            mw_music_stop();
+            music_playing = 0;
+        }
         if (open_settings) settings_open = 1;
         if (browse && !settings_open) {
             char before[2048];
@@ -367,7 +380,10 @@ int main(int argc, char **argv)
                 save_last_archive(archive);
                 /* Release the pads before handing the window to mwalk.exe so
                  * the game opens them as the only consumer, then rebuild the
-                 * device view once control comes back. */
+                 * device view once control comes back.  The launcher music
+                 * releases its audio device for the same reason. */
+                mw_music_stop();
+                music_playing = 0;
                 mw_input_shutdown();
                 int rc = spawn_game(base, archive, window);
                 SDL_ShowWindow(window);
@@ -376,6 +392,8 @@ int main(int argc, char **argv)
                 mw_settings_load(&settings, settings_path);
                 mw_input_init();
                 mw_input_load_maps(&settings);
+                if (settings.music_on)
+                    music_playing = mw_music_start();
                 if (rc != 0 && rc != -1) {
                     char msg[256];
                     snprintf(msg, sizeof(msg), "mwalk.exe exited with code %d.", rc);
@@ -399,6 +417,7 @@ int main(int argc, char **argv)
 
     if (settings_dirty)
         mw_settings_save(&settings, settings_path);
+    mw_music_stop();
     mw_input_shutdown();
     mw_ui_destroy(ui);
     SDL_DestroyRenderer(renderer);

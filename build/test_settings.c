@@ -96,6 +96,7 @@ int main(void)
         check_int("display_mode", s.display_mode, MW_DISPLAY_16_9);
 
         check_int("sound_on", s.sound_on, 1);
+        check_int("music_on", s.music_on, 1);
         check_int("shader_preset", s.shader_preset, 1);
         check_int("scanline_intensity", s.scanline_intensity, 50);
         check_int("window_w", s.window_w, 1280);
@@ -160,6 +161,7 @@ int main(void)
         a.show_fps = 1;
         a.display_mode = MW_DISPLAY_21_9;
         a.sound_on = 0;
+        a.music_on = 0;
         a.shader_preset = 2;
         a.scanline_intensity = 77;
         a.window_w = 1920;
@@ -186,6 +188,7 @@ int main(void)
                 check_int("rt show_fps", b.show_fps, 1);
                 check_int("rt display_mode", b.display_mode, MW_DISPLAY_21_9);
                 check_int("rt sound_on", b.sound_on, 0);
+                check_int("rt music_on", b.music_on, 0);
                 check_int("rt shader_preset", b.shader_preset, 2);
                 check_int("rt scanline_intensity", b.scanline_intensity, 77);
                 check_int("rt window_w", b.window_w, 1920);
@@ -247,6 +250,7 @@ int main(void)
                 check_int("legacy display_mode", s.display_mode, MW_DISPLAY_21_9);
 
                 check_int("legacy sound_on", s.sound_on, 1);
+                check_int("legacy music_on", s.music_on, 1);
                 check_int("legacy shader_preset", s.shader_preset, 1);
                 check_int("legacy scanline_intensity", s.scanline_intensity, 50);
                 check_int("legacy window_w", s.window_w, 1280);

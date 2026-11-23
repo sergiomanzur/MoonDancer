@@ -35,6 +35,7 @@ void mw_settings_defaults(mw_settings *s)
     s->show_fps = 0;
     s->display_mode = MW_DISPLAY_16_9;
     s->sound_on = 1;
+    s->music_on = 1;
     s->shader_preset = 1;
     s->scanline_intensity = 50;
     s->window_w = 1280;
@@ -155,6 +156,7 @@ int mw_settings_load(mw_settings *s, const char *path)
             s->display_mode = value;
         }
         else if (!strcmp(key, "sound_on")) s->sound_on = value ? 1 : 0;
+        else if (!strcmp(key, "music_on")) s->music_on = value ? 1 : 0;
         else if (!strcmp(key, "shader_preset")) s->shader_preset = clampi(value, 0, 2);
         else if (!strcmp(key, "scanline_intensity")) s->scanline_intensity = clampi(value, 0, 100);
         else if (!strcmp(key, "window_w")) s->window_w = value;
@@ -190,8 +192,8 @@ int mw_settings_save(const mw_settings *s, const char *path)
             clampi(s->volume, 0, 100), s->fullscreen ? 1 : 0, s->scanlines ? 1 : 0,
             s->integer_scale ? 1 : 0, s->show_fps ? 1 : 0,
             (s->display_mode >= 0 && s->display_mode < MW_DISPLAY_COUNT) ? s->display_mode : MW_DISPLAY_16_9);
-    fprintf(f, "sound_on=%d\nshader_preset=%d\nscanline_intensity=%d\nwindow_w=%d\nwindow_h=%d\n",
-            s->sound_on ? 1 : 0, clampi(s->shader_preset, 0, 2),
+    fprintf(f, "sound_on=%d\nmusic_on=%d\nshader_preset=%d\nscanline_intensity=%d\nwindow_w=%d\nwindow_h=%d\n",
+            s->sound_on ? 1 : 0, s->music_on ? 1 : 0, clampi(s->shader_preset, 0, 2),
             clampi(s->scanline_intensity, 0, 100), s->window_w, s->window_h);
     for (p = 0; p < MW_PLAYERS; p++) {
         fprintf(f, "key_map_p%d=", p);

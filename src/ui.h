@@ -35,7 +35,8 @@ void mw_ui_draw_background(mw_ui *ui);
 
 void mw_ui_draw_launcher(mw_ui *ui, mw_settings *settings,
                          const char *archive_path, const char *archive_status,
-                         int *browse, int *start, int *open_settings, int *quit);
+                         int *browse, int *start, int *open_settings, int *quit,
+                         int *changed);
 
 void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
                          int in_game, int *reset_game, int *quit_game,

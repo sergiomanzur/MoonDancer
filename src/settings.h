@@ -23,6 +23,7 @@ typedef struct mw_settings {
        three per-player control maps. Missing keys in an older settings.ini
        keep these defaults, so old files load cleanly. */
     int sound_on;           /* 0/1, default 1 */
+    int music_on;           /* 0/1, default 1; launcher background music */
     int shader_preset;      /* 0 OFF / 1 SCANLINES / 2 CRT, default 1 */
     int scanline_intensity; /* 0..100, default 50 */
     int window_w;           /* default 1280, 0 = use the preset list */

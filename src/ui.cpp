@@ -760,10 +760,10 @@ extern "C" void mw_ui_draw_background(mw_ui *ui)
 
 extern "C" void mw_ui_draw_launcher(mw_ui *ui, mw_settings *settings,
                                     const char *archive_path, const char *archive_status,
-                                    int *browse, int *start, int *open_settings, int *quit)
+                                    int *browse, int *start, int *open_settings, int *quit,
+                                    int *changed)
 {
     if (!ui) return;
-    (void)settings;
     ImGuiIO &io = ImGui::GetIO();
     float w = io.DisplaySize.x, h = io.DisplaySize.y;
     float s = ui_scale(ui);
@@ -880,9 +880,18 @@ extern "C" void mw_ui_draw_launcher(mw_ui *ui, mw_settings *settings,
         *start = 1;
 
     if (neon_button(ui, "##settings", "SETTINGS", ImVec2(px, py + 194 * s),
-                    ImVec2(220 * s, 44 * s), BUTTON_SECONDARY, true, s) && open_settings)
+                    ImVec2(160 * s, 44 * s), BUTTON_SECONDARY, true, s) && open_settings)
         *open_settings = 1;
-    if (neon_button(ui, "##quit", "QUIT", ImVec2(px + 236 * s, py + 194 * s),
+    {
+        bool music_on = settings && settings->music_on;
+        if (neon_button(ui, "##music", music_on ? "MUSIC ON" : "MUSIC OFF",
+                        ImVec2(px + 176 * s, py + 194 * s), ImVec2(140 * s, 44 * s),
+                        music_on ? BUTTON_SECONDARY : BUTTON_GHOST, true, s) && settings) {
+            settings->music_on = music_on ? 0 : 1;
+            if (changed) *changed = 1;
+        }
+    }
+    if (neon_button(ui, "##quit", "QUIT", ImVec2(px + 332 * s, py + 194 * s),
                     ImVec2(112 * s, 44 * s), BUTTON_DANGER, true, s) && quit)
         *quit = 1;
 
