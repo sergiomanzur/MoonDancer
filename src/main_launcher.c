@@ -143,7 +143,7 @@ static void save_last_archive(const char *archive)
     fclose(f);
 }
 
-static int spawn_game(const char *base, const char *archive)
+static int spawn_game(const char *base, const char *archive, SDL_Window *window)
 {
     int is_dir = dir_exists(archive);
 #ifdef _WIN32
@@ -176,6 +176,13 @@ static int spawn_game(const char *base, const char *archive)
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Moonwalker", msg, NULL);
         return -1;
     }
+    /* This process is still the foreground window right now, so grant the
+     * child the right to take foreground BEFORE hiding.  Hiding first
+     * makes the launcher non-foreground, and Windows then denies the new
+     * game window keyboard focus: the game looks fine but the keyboard is
+     * completely dead (gamepads are polled, so they keep working). */
+    AllowSetForegroundWindow(pi.dwProcessId);
+    if (window) SDL_HideWindow(window);
     WaitForSingleObject(pi.hProcess, INFINITE);
     DWORD code = 0;
     GetExitCodeProcess(pi.hProcess, &code);
@@ -362,8 +369,7 @@ int main(int argc, char **argv)
                  * the game opens them as the only consumer, then rebuild the
                  * device view once control comes back. */
                 mw_input_shutdown();
-                SDL_HideWindow(window);
-                int rc = spawn_game(base, archive);
+                int rc = spawn_game(base, archive, window);
                 SDL_ShowWindow(window);
                 SDL_RaiseWindow(window);
                 SDL_SetWindowInputFocus(window);

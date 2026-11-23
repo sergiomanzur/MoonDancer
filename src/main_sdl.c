@@ -430,6 +430,12 @@ int main(int argc, char **argv)
         return 1;
     }
     SDL_SetWindowMinimumSize(window, 640, 448);
+    /* When the launcher spawns the game it hands off foreground focus
+     * (AllowSetForegroundWindow in the launcher, granted while it is
+     * still the foreground window).  Raise ourselves too so a direct
+     * launch from a background shell also lands with keyboard focus —
+     * without it the game looks fine but never receives a key event. */
+    SDL_RaiseWindow(window);
 #ifdef _WIN32
     {
         SDL_SysWMinfo info;
@@ -438,6 +444,24 @@ int main(int argc, char **argv)
             BOOL dark = TRUE;
             if (FAILED(DwmSetWindowAttribute(info.info.win.window, 20, &dark, sizeof(dark))))
                 DwmSetWindowAttribute(info.info.win.window, 19, &dark, sizeof(dark));
+            /* SDL only raises the window; it never claims foreground.
+             * When the launcher spawns the game it hides itself first,
+             * and Windows hands foreground to whatever was behind it —
+             * the game window then NEVER receives a single key event
+             * while gamepads (polled, no focus needed) keep working.
+             * Attach this thread to the current foreground thread's
+             * input state so the focus claim is always legal, then
+             * take foreground + keyboard focus.  No-ops when the game
+             * already has focus (direct launch). */
+            HWND fgw = GetForegroundWindow();
+            DWORD fg_thread = fgw ? GetWindowThreadProcessId(fgw, NULL) : 0;
+            DWORD my_thread = GetCurrentThreadId();
+            if (fg_thread && fg_thread != my_thread)
+                AttachThreadInput(my_thread, fg_thread, TRUE);
+            SetForegroundWindow(info.info.win.window);
+            SetFocus(info.info.win.window);
+            if (fg_thread && fg_thread != my_thread)
+                AttachThreadInput(my_thread, fg_thread, FALSE);
         }
     }
 #endif
