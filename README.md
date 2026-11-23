@@ -29,16 +29,41 @@ The recommended way to play is `mwalk_launcher.exe`:
   drag the archive onto the launcher).
 - **START GAME** launches `mwalk.exe` directly from the selected ZIP. The
   archive is extracted to a per-user cache, so there is no manual ROM setup.
-- **SETTINGS** opens the shared neon settings overlay; the same overlay is
-  available inside the game with **F1**.
+- **SETTINGS** opens the shared neon overlay (SETTINGS and CONTROLLERS
+  panels) and reopens whichever panel was used last. The same overlay is
+  available inside the game with **F1**, which adds a CHEATS panel.
 - **QUIT** exits the launcher.
+
+START saves any pending settings and then runs `mwalk.exe` from the selected
+archive. Sound and all key/pad bindings reach the game through
+`settings.ini`, so no extra launch arguments are involved.
 
 The launcher uses `launcher_background.jfif`, bundled Audiowide/Rajdhani
 fonts, high-DPI rendering, and the same design language as the in-game
-settings panel. It remembers your archive and shares settings with the game.
-Settings are stored in
+settings panel. It remembers your archive, shows live controller state, and
+shares settings with the game. Settings are stored in
 `%APPDATA%\MoonwalkerRecomp\Moonwalker\settings.ini` on Windows, or the
 SDL preference directory on other platforms.
+
+## Settings and video options
+
+The overlay is shared by the launcher (SETTINGS) and the game (F1):
+
+- **AUDIO** -- MASTER VOLUME plus a **SOUND** toggle. Sound is on by default
+  (`sound_on=1`) and the toggle applies live: the SDL audio device opens or
+  closes without a restart, and the choice is saved. The legacy `--audio`
+  flag and `MW_AUDIO` environment variable still force sound on for a
+  session.
+- **DISPLAY** -- 4:3 ORIGINAL / 16:9 / 16:10 / 21:9 (see below).
+- **VIDEO** -- FULLSCREEN; **SHADER** preset **OFF / SCANLINES / CRT** with
+  **SCANLINE INTENSITY** (0-100%); **RESOLUTION** presets 1280x720,
+  1600x900, 1920x1080 and 2560x1440, applied to the window immediately (in
+  fullscreen the desktop size wins); and INTEGER SCALING. Shader presets run
+  in source space, so every emulated line gets exactly one scanline at any
+  window size: OFF is a byte-exact no-op, SCANLINES darkens alternate lines,
+  CRT adds a vertical aperture grille.
+- **INTERFACE** -- SHOW FPS.
+- **CONTROLLERS** -- the gamepad panel described below.
 
 ## Widescreen display modes
 
@@ -75,8 +100,9 @@ Working:
   sprite renderer matches MAME's `sega_sys16b` device exactly, verified
   against an independent re-implementation: transparent pixels consume a
   screen column, so zoomed sprites no longer shear or wobble.
-- Keyboard input for 1–3 players, coins, starts and service; coin/start
-  flow reaches actual gameplay.
+- Keyboard input for 1–3 players, plus up to three SDL game controllers
+  (auto-assigned to 1P/2P/3P, with full remapping); coins, starts and
+  service; coin/start flow reaches actual gameplay.
 - Coin/start flow verified against MAME: the service-port coin edge is
   latched, credits increment at `$E000`, the start press consumes a credit,
   and the post-start mode byte `$E036` matches MAME (`0x18`). Tile RAM and
@@ -99,9 +125,11 @@ Working:
 - Sound board: Z80 + two YM3438 (ymfm) with music and FM effects; ymfm
   timers and the YM IRQ line are wired to the Z80. The RF5C68 PCM device is
   modelled but Moonwalker's sound program does not currently write to it.
-  The Z80 always runs in a muted fast mode so the protection MCU's vblank
-  handshake stays alive; FM/PCM synthesis and the SDL audio device are
-  enabled only with `MW_AUDIO=1` while the audible path is re-verified.
+  FM/PCM synthesis and the SDL audio device are on by default
+  (`sound_on=1`); the audible path was verified against the MAME oracle
+  (dance-magic WAV envelope correlation, attract/gameplay replay runs with
+  no errors). With sound switched off the Z80 runs in a muted fast mode so
+  the protection MCU's vblank handshake stays alive.
 - Static recompilation: every reachable `(FD1094 state, PC)` pair is lifted
   to C, grouped into linked basic blocks, and dispatched through sorted
   tables. The current translation has 32,392 instruction blocks and 12,106
@@ -123,9 +151,6 @@ Working:
 
 Not finished yet:
 
-- Audio output is intentionally muted by default. The sound CPU and MCU
-  handshake run, but the FM/PCM mixer and SDL device are only enabled with
-  `MW_AUDIO=1` until the audible path is verified against the board.
 - Core correctness fixes, cross-checked against the MAME oracle: the lifted
   read-modify-write helpers no longer advance `(An)+`/`-(An)` twice, and
   16-bit writes to the 315-5195 mapper window now decode as a single
@@ -224,11 +249,59 @@ continues to work for an extracted folder.
 - `3` - start 3P (and coin 3 in individual-chute mode)
 - `Tab` - service, `7`/`8` - service 1/2
 - `P` - pause
-- `F1` - settings overlay (pauses the game while open)
-- `F5` - reset the game
+- `F1` - settings overlay (SETTINGS / CONTROLLERS / CHEATS; pauses the game
+  while open)
+- `F5` - reset the game (also clears the cheats)
 - `F11` - fullscreen
 - `F12` - save a BMP screenshot of the current display crop
 - `Esc` - close the settings overlay, or quit the game
+
+## Controllers
+
+Up to three SDL game controllers play at the same time. Pads are assigned to
+1P/2P/3P in connection order; a pad assigned to a player in the
+**CONTROLLERS** panel (available in the launcher and in the F1 overlay)
+keeps that player even when the pads are connected in a different order, and
+its slot stays reserved while it is unplugged. Pad assignment and every
+key/pad binding are stored in `settings.ini`.
+
+Default pad mapping (identical for all three players):
+
+| Action | Pad |
+| --- | --- |
+| Move | D-pad or left stick |
+| B1 / B2 / B3 | A / B / X |
+| Start | that player's start |
+| Back | that player's coin (1P: coin 1, 2P: coin 2) |
+
+- P3's start and coin 3 share one service bit (0x80) on the board, so 3P's
+  pad Start fires it and 3P's pad Back is unbound by default. It can be bound
+  in CONTROLLERS, but it fires the same shared bit.
+- Pads of the same model report the same GUID, so two identical controllers
+  cannot be told apart by the assignment row; they fall back to connection
+  order.
+- To rebind, click a KEY or PAD chip and press the new key/button (`Esc`
+  cancels). Bindings persist in `settings.ini` and are shared by the launcher
+  and the game.
+
+## Cheats
+
+Open the in-game overlay with **F1** and select the **CHEATS** panel. The
+four cheats are global (they cover 1P, 2P and 3P), session-only, applied to
+work RAM after every frame, never written to `settings.ini`, and cleared by
+**F5** or a reboot:
+
+- **INFINITE LIVES** -- freezes each active player's lives so the counter
+  never runs out.
+- **INVINCIBILITY** -- freezes player health so damage cannot kill.
+- **INFINITE MAGIC** -- refills the dance magic charge every frame.
+- **FREE CREDITS** -- holds 9 credits on the counter (works before a game
+  starts too).
+
+The HUD digits are drawn from the value captured at the start of a frame, so
+a freeze can show up one frame late; judge it by surviving, not by the digit.
+Act select is not supported: the act byte has no verified write window
+(writes revert within 1-2 frames or corrupt the player object).
 
 ## Static recompilation
 
@@ -381,5 +454,5 @@ The original code in this repository is provided under the MIT license (see
 4. Grow trace coverage (death/continue, all stages) so the Musashi fallback
    is needed less often, and tighten cycle accounting for exact attract-mode
    parity.
-5. Add ZIP loading, save states, gamepad mapping and packaging
-   (Windows ZIP, Linux AppImage, macOS .app, Android APK).
+5. Add save states and the remaining packaging targets (Linux AppImage,
+   macOS .app, Android APK).
