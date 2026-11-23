@@ -1,10 +1,11 @@
-# Moonwalker (Sega System 18) — native C/C++ port
+# Moon Dancer
 
-A from-scratch, native Windows/Linux/macOS runtime for **Michael Jackson's
-Moonwalker** (Sega System 18, 1990), built from the user's own `mwalk.zip`
-ROM set. It is not a MAME front end: the board's 68000, memory mapper, video
-hardware, I/O chip and sound board are implemented in portable C/C++ and the
-game's FD1094-encrypted program is executed by the native runtime.
+**v0.9.0b** — a from-scratch, native Windows/Linux/macOS runtime for **Michael
+Jackson's Moonwalker** (Sega System 18, 1990), built from the user's own
+`mwalk.zip` ROM set. It is not a MAME front end: the board's 68000, memory
+mapper, video hardware, I/O chip and sound board are implemented in portable
+C/C++ and the game's FD1094-encrypted program is executed by the native
+runtime.
 
 ```
 mwalk.exe  ->  System 18 machine model
@@ -20,6 +21,66 @@ mwalk.exe  ->  System 18 machine model
 ![Attract mode](docs/screenshot.png)
 
 ![Gameplay](docs/gameplay.png)
+
+## Quick start
+
+1. Own the arcade ROM set (`mwalk.zip`) — this project ships **no game
+   data** (see [ROM setup](#rom-setup)).
+2. Build the runtime: `cmake -S . -B build -G Ninja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=Release` then `cmake --build build`
+   (Linux/macOS: drop the `-G Ninja`/compiler flags — see
+   [Building](#building)).
+3. Run `build\mwalk_launcher.exe` (or `./build/mwalk_launcher`), BROWSE to
+   your `mwalk.zip`, press **START GAME**.
+4. In game: `5` inserts a coin, `1` starts; full layout under
+   [Controls](#controls).
+
+## What's new in 0.9.0b
+
+The first public beta. Accuracy fixes — every one verified against the MAME
+oracle (frame-identical tile/text RAM, lockstep CPU self-tests, audio envelope
+correlation):
+
+- **Sprite renderer** now matches MAME's `sega_sys16b` device exactly:
+  transparent pixels consume a screen column, so zoomed sprites no longer
+  shear, wobble, or lose their left half.
+- **Widescreen map margins** mirror the quadrant the level loader actually
+  streams — the foreign-map slabs that appeared past the original 320-column
+  window are gone.
+- **Interpreter branch patcher** preserves branch lengths (a byte branch was
+  patched as a word branch, shifting the CPU into mid-instruction and
+  crashing after the monkey room).
+- **Widescreen culling** is applied at all eight visibility sites on both CPU
+  paths (translated and interpreter), so objects no longer flicker between
+  alive and culled in the expanded view.
+- **Core board fixes**: read-modify-write helpers no longer advance `(An)+`/
+  `-(An)` twice, and 16-bit writes to the 315-5195 mapper window decode as a
+  single low-byte register write. The vblank palette queue drains every
+  frame — 60,000-frame attract and 30,000-frame gameplay runs complete with
+  zero interpreter fallbacks, zero illegal opcodes and zero watchdog resets.
+- **RF5C68 PCM** model fixed (bank shift, 10 MHz clock, output level): the
+  dance-magic song plays, envelope-matched against MAME.
+- **Keyboard focus**: the launcher used to hide itself before spawning the
+  game, so Windows denied the game window keyboard focus (pads kept working
+  because they are polled). The launcher now grants foreground rights and
+  the game claims focus on startup.
+
+Features added in this release:
+
+- **Launcher music** — a procedurally generated synthwave loop (Am–F–C–G,
+  kick/sub bass/arp/pad/hat layers, LFO filter pump) with a MUSIC toggle
+  that persists in `settings.ini`. No audio assets, no new dependencies.
+- **Sound on by default** with a live SOUND toggle; `--audio`/`MW_AUDIO`
+  remain force-on overrides.
+- **Video options**: shader presets OFF / SCANLINES / CRT with an intensity
+  slider (computed per emulated scanline, so effects stay crisp at any
+  window size) and window-resolution presets.
+- **Cheat menu** (in-game F1): infinite lives, invincibility, infinite dance
+  magic, free credits — global, session-only, live-toggleable.
+- **Three simultaneous game controllers** with per-player keyboard and pad
+  remapping (press-to-capture), GUID-based assignment that survives
+  replug/reorder, and a reserved-slot display.
+- **Widescreen display modes** (16:9 / 16:10 / 21:9) active from boot, with
+  attract screens still presented in 4:3.
 
 ## Launcher
 
@@ -40,8 +101,10 @@ archive. Sound and all key/pad bindings reach the game through
 
 The launcher uses `launcher_background.jfif`, bundled Audiowide/Rajdhani
 fonts, high-DPI rendering, and the same design language as the in-game
-settings panel. It remembers your archive, shows live controller state, and
-shares settings with the game. Settings are stored in
+settings panel — plus a generated synthwave soundtrack (**MUSIC ON/OFF**
+button, persisted in `settings.ini`; it pauses while the game runs and
+resumes when you come back). It remembers your archive, shows live
+controller state, and shares settings with the game. Settings are stored in
 `%APPDATA%\MoonwalkerRecomp\Moonwalker\settings.ini` on Windows, or the
 SDL preference directory on other platforms.
 
@@ -167,7 +230,9 @@ Not finished yet:
 - The ROM sweep covers direct control flow in the code image; a function
   reached only through an unobserved computed jump/call can still fall back
   to Musashi. `src/generated_game.c` is derived from your ROM and is
-  intentionally excluded from the repository and the Windows package.
+  intentionally excluded from the repository; the compiled translation is
+  linked into the binary you build, so keep binaries built from your ROMs
+  to yourself.
 - Demo-mode P1 input values are bit-identical at the game's read points,
   but the intro task transition is still 4 frames out of phase: MAME switches
   to the gameplay task while both port CPU paths remain on the intro task.
