@@ -686,19 +686,19 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
     text_spaced(bg, ui->font_small, label_size, ImVec2(px, y_audio),
                 A(C_CYAN, 220), "AUDIO", 2.0f * s);
 
-    float y_display = py + 196 * s;
+    float y_display = py + 240 * s;
     text_spaced(bg, ui->font_small, label_size, ImVec2(px, y_display),
                 A(C_CYAN, 220), "DISPLAY", 2.0f * s);
 
-    float y_video = py + 294 * s;
+    float y_video = py + 338 * s;
     text_spaced(bg, ui->font_small, label_size, ImVec2(px, y_video),
                 A(C_CYAN, 220), "VIDEO", 2.0f * s);
 
-    float y_ui = py + 478 * s;
+    float y_ui = py + 522 * s;
     text_spaced(bg, ui->font_small, label_size, ImVec2(px, y_ui),
                 A(C_CYAN, 220), "INTERFACE", 2.0f * s);
 
-    bg->AddRectFilled(ImVec2(px, py + 560 * s), ImVec2(px + pw - 76 * s, py + 561 * s),
+    bg->AddRectFilled(ImVec2(px, py + 600 * s), ImVec2(px + pw - 76 * s, py + 601 * s),
                       A(C_CYAN, 36));
 
     ImGui::SetNextWindowPos(ImVec2(0, 0));
@@ -713,6 +713,10 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
                  ImGuiWindowFlags_NoBackground);
 
     volume_row(ui, settings, ImVec2(px, y_audio + 22 * s), pw - 76 * s, s, changed);
+    bool snd = settings->sound_on != 0;
+    if (toggle_row(ui, "##sound", "SOUND", "Music and sound effects",
+                   &snd, ImVec2(px, y_audio + 78 * s), pw - 76 * s, s, changed))
+        settings->sound_on = snd ? 1 : 0;
     display_mode_row(ui, settings, ImVec2(px, y_display + 22 * s),
                      pw - 76 * s, s, changed);
     text(bg, ui->font_small, 14 * s, ImVec2(px, y_display + 72 * s),
@@ -738,7 +742,7 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
                    &fps, ImVec2(px, y_ui + 22 * s), pw - 76 * s, s, changed))
         settings->show_fps = fps ? 1 : 0;
 
-    float btn_y = py + 578 * s;
+    float btn_y = py + 618 * s;
     if (in_game) {
         if (neon_button(ui, "##quitgame", "QUIT GAME", ImVec2(px, btn_y),
                         ImVec2(150 * s, 48 * s), BUTTON_DANGER, true, s) && quit_game)

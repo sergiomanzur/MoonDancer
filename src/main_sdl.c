@@ -36,6 +36,7 @@ static uint8_t key_latch[SDL_NUM_SCANCODES];
 static int g_demo;
 static uint8_t g_dsw = 0xFD;
 static s18_audio_t *g_sdl_audio;
+static SDL_AudioDeviceID g_audio_dev;
 static mw_settings g_settings;
 
 static void sdl_audio_cb(void *userdata, Uint8 *stream, int len)
@@ -48,6 +49,39 @@ static void sdl_audio_cb(void *userdata, Uint8 *stream, int len)
     if (vol < 0.999f) {
         for (int i = 0; i < count; i++)
             samples[i] = (int16_t)(samples[i] * vol);
+    }
+}
+
+/* Open (on != 0) or close the SDL audio device for the shared sound board.
+ *
+ * g_sdl_audio itself is never invalidated: s18_audio_read() is only ever
+ * called from sdl_audio_cb, which SDL invokes on its audio thread only while
+ * a device is open.  Pausing and closing therefore leaves no reader at all,
+ * so the emulator keeps running the Z80/MCU handshake with FM/PCM synthesis
+ * skipped (s18_audio_set_fast(1)), exactly like the old muted default.
+ * Reopening uses the same want spec as boot so the sample rate never changes
+ * underneath the ring buffer. */
+static void audio_apply(int on)
+{
+    if (on) {
+        s18_audio_set_fast(0);
+        if (g_audio_dev || !g_sdl_audio) return;
+        SDL_AudioSpec want;
+        SDL_zero(want);
+        want.freq = s18_audio_sample_rate();
+        want.format = AUDIO_S16SYS;
+        want.channels = 1;
+        want.samples = 1024;
+        want.callback = sdl_audio_cb;
+        g_audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, NULL, 0);
+        if (g_audio_dev) SDL_PauseAudioDevice(g_audio_dev, 0);
+    } else {
+        if (g_audio_dev) {
+            SDL_PauseAudioDevice(g_audio_dev, 1);
+            SDL_CloseAudioDevice(g_audio_dev);
+            g_audio_dev = 0;
+        }
+        s18_audio_set_fast(1);
     }
 }
 
@@ -183,7 +217,6 @@ int main(int argc, char **argv)
             return 0;
         }
     }
-    int audio_on = cli_audio || getenv("MW_AUDIO") != NULL;
 
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
@@ -195,6 +228,11 @@ int main(int argc, char **argv)
     mw_settings_load(&g_settings, settings_path);
     if (cli_display >= 0 && cli_display < MW_DISPLAY_COUNT)
         g_settings.display_mode = cli_display;
+
+    /* Sound follows the saved setting (on by default); --audio and MW_AUDIO
+     * stay force-on overrides and win over the panel toggle. */
+    const int audio_forced = cli_audio || getenv("MW_AUDIO") != NULL;
+    int audio_on = audio_forced || g_settings.sound_on;
 
     static char extracted_romdir[2048];
     if (zip) {
@@ -248,9 +286,9 @@ int main(int argc, char **argv)
         return 1;
     }
     /* The protection MCU deadlocks if the sound CPU is absent, so always
-     * run it.  Full YM3438/RF5C68 synthesis is only enabled when the user
-     * asks for sound (--audio or MW_AUDIO); the default keeps the game on
-     * the verified silent trajectory. */
+     * run it.  FM/PCM synthesis and the SDL device follow the SOUND setting
+     * (on by default) through audio_apply(); the Z80/MCU handshake keeps
+     * running even while muted. */
     s18_audio_t *audio = s18_audio_create(&machine, romdir);
     if (!audio) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Moonwalker",
@@ -258,7 +296,6 @@ int main(int argc, char **argv)
         SDL_Quit();
         return 1;
     }
-    s18_audio_set_fast(audio_on ? 0 : 1);
 
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
     SDL_Window *window = SDL_CreateWindow("Michael Jackson's Moonwalker",
@@ -308,18 +345,7 @@ int main(int argc, char **argv)
     }
 
     g_sdl_audio = audio;
-    SDL_AudioDeviceID audio_dev = 0;
-    if (audio && audio_on) {
-        SDL_AudioSpec want;
-        SDL_zero(want);
-        want.freq = s18_audio_sample_rate();
-        want.format = AUDIO_S16SYS;
-        want.channels = 1;
-        want.samples = 1024;
-        want.callback = sdl_audio_cb;
-        audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, NULL, 0);
-        if (audio_dev) SDL_PauseAudioDevice(audio_dev, 0);
-    }
+    audio_apply(audio_on);
 
     int running = 1;
     int paused = 0;
@@ -327,6 +353,7 @@ int main(int argc, char **argv)
     int settings_open = start_settings;
     int settings_dirty = 0;
     int applied_fullscreen = g_settings.fullscreen;
+    int applied_audio = audio_on;
     Uint32 last_save = 0;
     double fps = 60.0;
     Uint64 fps_last = SDL_GetPerformanceCounter();
@@ -447,6 +474,13 @@ int main(int argc, char **argv)
             apply_fullscreen(window, g_settings.fullscreen);
             applied_fullscreen = g_settings.fullscreen;
         }
+        /* The F1 panel's SOUND toggle applies live, like fullscreen above.
+         * A forced-on --audio / MW_AUDIO keeps the device open. */
+        int want_audio = audio_forced || g_settings.sound_on;
+        if (want_audio != applied_audio) {
+            audio_apply(want_audio);
+            applied_audio = want_audio;
+        }
 
         uint64_t now = SDL_GetPerformanceCounter();
         double elapsed = (double)(now - last) / (double)SDL_GetPerformanceFrequency();
@@ -469,7 +503,11 @@ int main(int argc, char **argv)
 
     if (settings_dirty)
         mw_settings_save(&g_settings, settings_path);
-    if (audio_dev) SDL_CloseAudioDevice(audio_dev);
+    if (g_audio_dev) {
+        SDL_PauseAudioDevice(g_audio_dev, 1);
+        SDL_CloseAudioDevice(g_audio_dev);
+        g_audio_dev = 0;
+    }
     s18_audio_destroy(audio);
     s18_mcu_destroy(mcu);
     SDL_DestroyTexture(texture);
