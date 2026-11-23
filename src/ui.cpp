@@ -17,6 +17,22 @@
 #include <cstring>
 #include <string>
 
+/* The browser scans plain directories with the same per-platform branch the
+ * launcher uses for dir_exists().  NOMINMAX keeps windows.h out of the way of
+ * the std::min/std::max calls above. */
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <dirent.h>
+#include <sys/stat.h>
+#endif
+
 struct mw_ui {
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -603,6 +619,95 @@ void draw_corner(ImDrawList *dl, ImVec2 p, float len, ImU32 col, int dir_x, int 
     dl->AddLine(p, ImVec2(p.x, p.y + dir_y * len), col, 2.0f * s);
     dl->AddCircleFilled(ImVec2(p.x + dir_x * len, p.y), 2.5f * s, col);
     dl->AddCircleFilled(ImVec2(p.x, p.y + dir_y * len), 2.5f * s, col);
+}
+
+/* ---------------- in-UI archive browser ---------------- */
+
+#define FB_MAX_ENTRIES 512
+
+struct fb_entry {
+    std::string name;
+    int is_dir;
+    int is_zip;
+};
+
+std::string fb_join(const std::string &dir, const char *name)
+{
+    std::string out = dir;
+    if (!name || !*name) return out;
+    if (!out.empty() && out.back() != '/' && out.back() != '\\') out += '/';
+    out += name;
+    return out;
+}
+
+std::string fb_parent(const std::string &dir)
+{
+    std::string d = dir;
+    while (d.size() > 1 && (d.back() == '/' || d.back() == '\\')) d.pop_back();
+    if (d.empty()) return d;
+    if (d.size() == 2 && d[1] == ':') return d + '/';    /* Windows drive root */
+    size_t at = d.find_last_of("/\\");
+    if (at == std::string::npos) return d;
+    if (at == 0) return d.substr(0, 1);                  /* POSIX root */
+    std::string up = d.substr(0, at);
+    if (up.size() == 2 && up[1] == ':') up += '/';
+    return up;
+}
+
+int fb_zip_name(const std::string &name)
+{
+    return name.size() > 4 &&
+           SDL_strcasecmp(name.c_str() + name.size() - 4, ".zip") == 0;
+}
+
+/* Plain-C directory scan (FindFirstFileA / opendir), sorted directories first
+ * then case-insensitively by name.  ".." is added by the caller, not here. */
+int fb_scan(const char *dir, fb_entry *out, int max)
+{
+    int n = 0;
+    if (!dir || !*dir || !out || max <= 0) return 0;
+#ifdef _WIN32
+    std::string pattern = dir;
+    if (pattern.back() != '/' && pattern.back() != '\\') pattern += '\\';
+    pattern += '*';
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern.c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+            if (n >= max) break;
+            out[n].name = fd.cFileName;
+            out[n].is_dir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            n++;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    DIR *d = opendir(dir);
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            struct stat st;
+            std::string full;
+            if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+            if (n >= max) break;
+            full = fb_join(dir, e->d_name);
+            if (stat(full.c_str(), &st) != 0) continue;
+            if (!S_ISREG(st.st_mode) && !S_ISDIR(st.st_mode)) continue;
+            out[n].name = e->d_name;
+            out[n].is_dir = S_ISDIR(st.st_mode) ? 1 : 0;
+            n++;
+        }
+        closedir(d);
+    }
+#endif
+    for (int i = 0; i < n; i++)
+        out[i].is_zip = out[i].is_dir ? 0 : fb_zip_name(out[i].name);
+    std::sort(out, out + n, [](const fb_entry &a, const fb_entry &b) {
+        if (a.is_dir != b.is_dir) return a.is_dir > b.is_dir;
+        return SDL_strcasecmp(a.name.c_str(), b.name.c_str()) < 0;
+    });
+    return n;
 }
 
 } // namespace
@@ -1452,6 +1557,195 @@ extern "C" void mw_ui_draw_cheats(mw_ui *ui, mw_cheats *cheats, int *open)
     if (neon_button(ui, "##cheats_x", "X", ImVec2(panel.x + pw - 54 * s, panel.y + 20 * s),
                     ImVec2(32 * s, 32 * s), BUTTON_GHOST, true, s))
         *open = 0;
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+}
+
+extern "C" void mw_ui_file_browser(mw_ui *ui, mw_file_browser *fb, const char *base)
+{
+    if (!ui || !fb || !fb->active) return;
+    ImGuiIO &io = ImGui::GetIO();
+    float w = io.DisplaySize.x, h = io.DisplaySize.y;
+    float s = ui_scale(ui);
+    ImDrawList *bg = ImGui::GetBackgroundDrawList();
+
+    /* The host seeds cwd from the launcher base; an empty one still works. */
+    fb->cwd[sizeof(fb->cwd) - 1] = 0;
+    if (!fb->cwd[0]) {
+        snprintf(fb->cwd, sizeof(fb->cwd), "%s", base ? base : "");
+        fb->cwd[sizeof(fb->cwd) - 1] = 0;
+    }
+
+    /* ".." is always the first row, so the list reads like every file manager
+     * and the gamepad's first Down never sits on a dim, inert entry. */
+    fb_entry rows[FB_MAX_ENTRIES];
+    int count = 0;
+    rows[count].name = "..";
+    rows[count].is_dir = 1;
+    rows[count].is_zip = 0;
+    count++;
+    count += fb_scan(fb->cwd, rows + count, FB_MAX_ENTRIES - count);
+
+    bg->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(3, 5, 12, 226));
+    for (float y = 0; y < h; y += 3.0f * s)
+        bg->AddLine(ImVec2(0, y), ImVec2(w, y), IM_COL32(0, 0, 0, 16), 1.0f);
+
+    const float pw = 840.0f * s, ph = 660.0f * s;
+    ImVec2 panel((w - pw) * 0.5f, (h - ph) * 0.5f);
+    draw_panel(bg, panel, ImVec2(pw, ph), 18.0f * s, true);
+    float px = panel.x + 38.0f * s;
+    float py = panel.y + 28.0f * s;
+    float inner_w = pw - 76.0f * s;
+
+    text_spaced(bg, ui->font_small, 14.0f * s, ImVec2(px, py),
+                A(C_CYAN, 235), "ROM ARCHIVE", 2.6f * s);
+    text_glow(bg, ui->font_title, 36.0f * s, ImVec2(px, py + 20.0f * s),
+              "SELECT ARCHIVE", IM_COL32(245, 252, 255, 255), C_CYAN, s);
+    bg->AddRectFilledMultiColor(ImVec2(px, py + 66.0f * s),
+                                ImVec2(px + inner_w, py + 68.0f * s),
+                                C_MAGENTA, C_CYAN, C_CYAN, C_MAGENTA);
+
+    text_spaced(bg, ui->font_small, 11.0f * s, ImVec2(px, py + 78.0f * s),
+                A(C_DIM, 230), "CURRENT FOLDER", 1.8f * s);
+    {
+        std::string where = ellipsize(ui->font_body, 16.0f * s, fb->cwd, inner_w);
+        text(bg, ui->font_body, 16.0f * s, ImVec2(px, py + 94.0f * s),
+             A(C_TEXT, 238), where.c_str());
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(w, h));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+    ImGui::Begin("##file_browser_ui", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                 ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus |
+                 ImGuiWindowFlags_NoBackground);
+
+    const float row_h = 38.0f * s;
+    const float list_h = 380.0f * s;
+    ImGui::SetCursorScreenPos(ImVec2(px, py + 126.0f * s));
+    /* NavFlattened keeps the list rows in the same nav order as the footer
+     * buttons: the pad's first Down lands on the ".." row, never on a button
+     * below the list. */
+    ImGui::BeginChild("##fb_list", ImVec2(inner_w, list_h),
+                      ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoSavedSettings);
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    float row_w = ImGui::GetContentRegionAvail().x;
+    if (count == 1)
+        text(dl, ui->font_small, 14.0f * s, ImVec2(0, 18.0f * s),
+             A(C_DIM, 210), "EMPTY FOLDER");
+
+    for (int i = 0; i < count; i++) {
+        int is_up = i == 0;
+        int is_dir = rows[i].is_dir;
+        int is_zip = rows[i].is_zip;
+        int selectable = is_dir || is_zip;
+        ImGui::SetCursorPos(ImVec2(0.0f, (float)i * row_h));
+        ImGui::PushID(i);
+        /* The whole row is the target, exactly like the binding chips: the
+         * gamepad focus ring and the activation both come from the shared
+         * InvisibleButton + item_pressed() contract. */
+        ImGui::InvisibleButton("##fbrow", ImVec2(row_w, row_h),
+                               ImGuiButtonFlags_EnableNav);
+        bool hovered = item_hot();
+        bool pressed = item_pressed();
+        ImVec2 rmin = ImGui::GetItemRectMin();
+        ImVec2 rmax = ImGui::GetItemRectMax();
+        float rounding = 8.0f * s;
+
+        if (hovered) {
+            dl->AddRectFilled(rmin, rmax, A(C_CYAN, 26), rounding);
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+        } else if (i & 1) {
+            dl->AddRectFilled(rmin, rmax, IM_COL32(255, 255, 255, 6), rounding);
+        }
+        if (!is_up)
+            dl->AddLine(ImVec2(rmin.x + 12.0f * s, rmax.y),
+                        ImVec2(rmax.x - 12.0f * s, rmax.y), A(C_CYAN, 14), 1.0f);
+
+        float isz = 16.0f * s;
+        ImVec2 ip(rmin.x + 12.0f * s, rmin.y + (row_h - isz) * 0.5f);
+        ImU32 icol = is_dir ? A(C_CYAN, hovered ? 245 : 165)
+                            : (is_zip ? A(C_MAGENTA, hovered ? 245 : 165)
+                                      : A(C_DIM, 150));
+        dl->AddRectFilled(ip, ImVec2(ip.x + isz, ip.y + isz), A(icol, 30), 3.0f * s);
+        dl->AddRect(ip, ImVec2(ip.x + isz, ip.y + isz), icol, 3.0f * s, 0, 1.0f);
+        if (is_dir)
+            dl->AddRectFilled(ImVec2(ip.x + 2.0f * s, ip.y - 2.5f * s),
+                              ImVec2(ip.x + isz * 0.6f, ip.y + 1.5f * s),
+                              icol, 1.5f * s);
+
+        {
+            float fs = 19.0f * s;
+            std::string shown = ellipsize(ui->font_body, fs, rows[i].name, row_w - 150.0f * s);
+            ImVec2 tsz = text_size(ui->font_body, fs, shown.c_str());
+            ImU32 name_col = selectable ? (hovered ? C_TEXT : IM_COL32(226, 240, 250, 255))
+                                        : C_DIM;
+            text(dl, ui->font_body, fs,
+                 ImVec2(rmin.x + 40.0f * s, rmin.y + (row_h - tsz.y) * 0.5f - 1.0f * s),
+                 name_col, shown.c_str());
+        }
+
+        const char *tag = is_up ? "UP" : (is_dir ? "OPEN" : (is_zip ? "ZIP" : NULL));
+        if (tag) {
+            float fs = 11.0f * s;
+            ImVec2 tsz = text_size(ui->font_small, fs, tag);
+            float cw = tsz.x + 16.0f * s, ch = 20.0f * s;
+            ImVec2 cp(rmax.x - 14.0f * s - cw, rmin.y + (row_h - ch) * 0.5f);
+            ImU32 accent = is_zip ? C_MAGENTA : C_CYAN;
+            dl->AddRectFilled(cp, ImVec2(cp.x + cw, cp.y + ch),
+                              A(accent, hovered ? 40 : 18), 6.0f * s);
+            dl->AddRect(cp, ImVec2(cp.x + cw, cp.y + ch),
+                        A(accent, hovered ? 210 : 80), 6.0f * s, 0, 1.0f);
+            text(dl, ui->font_small, fs,
+                 ImVec2(cp.x + (cw - tsz.x) * 0.5f, cp.y + (ch - tsz.y) * 0.5f - 1.0f * s),
+                 A(accent, 245), tag);
+        }
+
+        if (pressed) {
+            if (is_up) {
+                std::string up = fb_parent(fb->cwd);
+                if (up != fb->cwd)
+                    snprintf(fb->cwd, sizeof(fb->cwd), "%s", up.c_str());
+            } else if (is_dir) {
+                std::string next = fb_join(fb->cwd, rows[i].name.c_str());
+                snprintf(fb->cwd, sizeof(fb->cwd), "%s", next.c_str());
+            } else if (is_zip) {
+                std::string full = fb_join(fb->cwd, rows[i].name.c_str());
+                snprintf(fb->selection, sizeof(fb->selection), "%s", full.c_str());
+                fb->done = 1;
+            }
+        }
+        ImGui::PopID();
+    }
+    ImGui::EndChild();
+
+    float btn_y = panel.y + ph - 38.0f * s - 48.0f * s;
+    if (neon_button(ui, "##fbselect", "SELECT THIS FOLDER", ImVec2(px, btn_y),
+                    ImVec2(240.0f * s, 48.0f * s), BUTTON_SECONDARY, true, s)) {
+        snprintf(fb->selection, sizeof(fb->selection), "%s", fb->cwd);
+        fb->done = 1;
+    }
+    if (neon_button(ui, "##fbclose", "CLOSE",
+                    ImVec2(panel.x + pw - 38.0f * s - 180.0f * s, btn_y),
+                    ImVec2(180.0f * s, 48.0f * s), BUTTON_PRIMARY, true, s)) {
+        fb->active = 0;
+        fb->done = 0;
+    }
+    if (neon_button(ui, "##fbx", "X",
+                    ImVec2(panel.x + pw - 54.0f * s, panel.y + 20.0f * s),
+                    ImVec2(32.0f * s, 32.0f * s), BUTTON_GHOST, true, s)) {
+        fb->active = 0;
+        fb->done = 0;
+    }
+    text_spaced(bg, ui->font_small, 11.0f * s, ImVec2(px + 254.0f * s, btn_y + 17.0f * s),
+                A(C_DIM, 215), "DPAD MOVE   A OPEN / SELECT", 1.5f * s);
 
     ImGui::End();
     ImGui::PopStyleColor();

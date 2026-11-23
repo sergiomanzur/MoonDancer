@@ -167,6 +167,11 @@ int main(int argc, char **argv)
     int settings_dirty = 0;
     int music_playing = 0;
     Uint32 last_save = 0;
+    /* The in-UI archive browser: the fallback for hosts whose native picker
+     * declines (Linux/SteamOS, Android).  It persists across frames because it
+     * owns its own folder and pending selection. */
+    mw_file_browser fb;
+    memset(&fb, 0, sizeof(fb));
 
     if (settings.music_on)
         music_playing = mw_music_start();
@@ -197,10 +202,18 @@ int main(int argc, char **argv)
                 if (event.key.repeat) break;
                 if (capture_busy) break;
                 if (event.key.keysym.scancode == SDL_SCANCODE_F1) {
-                    settings_open = !settings_open;
+                    if (!fb.active) settings_open = !settings_open;
                 } else if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
-                    if (settings_open) settings_open = 0;
-                    else running = 0;
+                    /* The browser is modal: ESC backs out of it before it can
+                     * reach the launcher's own settings toggle / quit. */
+                    if (fb.active) {
+                        fb.active = 0;
+                        fb.done = 0;
+                    } else if (settings_open) {
+                        settings_open = 0;
+                    } else {
+                        running = 0;
+                    }
                 }
                 break;
             default:
@@ -209,14 +222,27 @@ int main(int argc, char **argv)
         }
 
         mw_ui_begin(ui);
-        if (!settings_open)
+        if (fb.active) {
+            /* Modal: the launcher card is not submitted, so neither clicks nor
+             * the gamepad nav focus can land on a button behind the browser. */
+            mw_ui_file_browser(ui, &fb, base);
+        } else if (!settings_open) {
             mw_ui_draw_launcher(ui, &settings, archive, archive_status(archive),
                                 &browse, &start, &open_settings, &quit, &changed);
-        if (settings_open) {
+        }
+        if (settings_open && !fb.active) {
             if (mw_ui_tab(ui) == MW_UI_TAB_CONTROLLERS)
                 mw_ui_draw_controllers(ui, &settings, &settings_open, &changed);
             else
                 mw_ui_draw_settings(ui, &settings, &settings_open, 0, NULL, NULL, &changed);
+        }
+        /* The browser fills in the selection; the host adopts it exactly like
+         * the native dialog's result. */
+        if (fb.done) {
+            snprintf(archive, sizeof(archive), "%s", fb.selection);
+            save_last_archive(archive);
+            fb.active = 0;
+            fb.done = 0;
         }
         /* Same ruling as the game overlay: what the panel does not own is
          * disarmed, so no capture survives a close, tab switch or START. */
@@ -243,9 +269,16 @@ int main(int argc, char **argv)
         if (browse && !settings_open) {
             char before[2048];
             snprintf(before, sizeof(before), "%s", archive);
-            mw_host_browse_archive(window, archive, (int)sizeof(archive));
-            if (strcmp(before, archive) != 0)
+            if (!mw_host_browse_archive(window, archive, (int)sizeof(archive))) {
+                /* This host has no native picker (Linux/SteamOS, Android): the
+                 * in-UI browser opens at the launcher's own folder. */
+                fb.active = 1;
+                fb.done = 0;
+                fb.selection[0] = 0;
+                snprintf(fb.cwd, sizeof(fb.cwd), "%s", base);
+            } else if (strcmp(before, archive) != 0) {
                 save_last_archive(archive);
+            }
         }
         if (start && !settings_open) {
             if (!archive[0]) {

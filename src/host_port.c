@@ -103,6 +103,7 @@ int mw_host_browse_archive(SDL_Window *window, char *out, int cap)
     static const wchar_t filter[] =
         L"Moonwalker ROM archive (*.zip)\0*.zip\0All files (*.*)\0*.*\0\0";
     OPENFILENAMEW ofn;
+    if (!out || cap <= 0) return 0;
     memset(&ofn, 0, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = window_hwnd(window);
@@ -112,8 +113,11 @@ int mw_host_browse_archive(SDL_Window *window, char *out, int cap)
     ofn.lpstrTitle = L"Select the Moonwalker ROM archive";
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (GetOpenFileNameW(&ofn)) {
-        WideCharToMultiByte(CP_UTF8, 0, file, -1, out, cap, NULL, NULL);
-        return 1;
+        /* Claim filled only when the UTF-8 conversion actually wrote out: a
+         * short cap leaves out untouched, and the launcher must then fall back
+         * to its in-UI browser rather than trust a stale path. */
+        int n = WideCharToMultiByte(CP_UTF8, 0, file, -1, out, cap, NULL, NULL);
+        return n > 0;
     }
     return 0;
 #else

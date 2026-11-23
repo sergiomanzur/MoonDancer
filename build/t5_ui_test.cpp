@@ -13,6 +13,10 @@
  *   nav    <ini>   gamepad navigation: the pad walks the launcher card and the
  *                  overlay with no mouse event, and the mouse still behaves
  *                  exactly as before
+ *   browse <ini>   in-UI archive browser: a real fixture tree on disk is
+ *                  listed, directories enter, ".." walks back out, .zip files
+ *                  and the current folder are selectable, other files are not,
+ *                  and the D-pad + A reach a row with no mouse event
  *
  * Build (from the repo root, after `cmake --build build` refreshed the libs):
  *   g++ -std=c++17 -O2 -I src -I third_party/imgui -I third_party/imgui/backends
@@ -29,6 +33,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 #include "imgui.h"
 #include "imgui_impl_sdl2.h"
@@ -57,6 +67,11 @@ static int g_pad_capability;
 static const char *g_archive;
 static const char *g_status;
 static int g_browse, g_start, g_open_settings, g_quit;
+
+/* browse mode: the in-UI archive browser owns the frame, with no launcher and
+ * no overlay behind it (which is how the host draws it too). */
+static mw_file_browser g_fb;
+static const char *g_fb_base;
 
 static void check(int cond, const char *what)
 {
@@ -90,7 +105,11 @@ static void pump(void)
         ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasGamepad;
         ImGui::NewFrame();
     }
-    if (g_launcher) {
+    if (g_fb.active) {
+        /* The host suppresses the launcher while the browser is modal, so the
+         * nav focus order never reaches a hidden button. */
+        mw_ui_file_browser(g_ui, &g_fb, g_fb_base);
+    } else if (g_launcher) {
         mw_ui_draw_launcher(g_ui, &g_st, g_archive, g_status, &g_browse,
                             &g_start, &g_open_settings, &g_quit, &g_changed);
     } else if (g_open) {
@@ -582,6 +601,180 @@ static void run_nav(void)
     shot("n4_mouse");
 }
 
+/* ---- in-UI archive browser (Task 5) ----
+ * Fixture geometry mirrors mw_ui_file_browser at DisplaySize 1280x720 (s = 1):
+ * panel (220,30) 840x660, px/py 258/58, list at y 200 with 38-px rows. */
+static const char *FB_ROOT = "C:/Users/sergi/Homestead/code/moonwalkerRecomp/build/fb_fixture";
+static const char *FB_NAV  = "C:/Users/sergi/Homestead/code/moonwalkerRecomp/build/fb_fixture/nav";
+static const char *FB_MANY = "C:/Users/sergi/Homestead/code/moonwalkerRecomp/build/fb_fixture/many";
+static const float FB_PW = 840.0f, FB_PH = 660.0f;
+static const float FB_PANEL_X = (1280.0f - FB_PW) * 0.5f;
+static const float FB_PANEL_Y = (720.0f - FB_PH) * 0.5f;
+static const float FB_PX = FB_PANEL_X + 38.0f;
+static const float FB_PY = FB_PANEL_Y + 28.0f;
+static const float FB_ROW_H = 38.0f;
+static const float FB_LIST_Y = FB_PY + 126.0f;
+static const float FB_BTN_Y = FB_PANEL_Y + FB_PH - 38.0f - 48.0f;
+
+static int fb_row_x(void) { return (int)(FB_PX + 30.0f); }
+static int fb_row_y(int i) { return (int)(FB_LIST_Y + i * FB_ROW_H + FB_ROW_H * 0.5f); }
+static int fb_btn_cy(void) { return (int)(FB_BTN_Y + 24.0f); }
+static int fb_select_x(void) { return (int)(FB_PX + 120.0f); }
+static int fb_close_x(void) { return (int)(FB_PANEL_X + FB_PW - 38.0f - 180.0f + 90.0f); }
+static int fb_x_x(void) { return (int)(FB_PANEL_X + FB_PW - 54.0f + 16.0f); }
+static int fb_x_y(void) { return (int)(FB_PANEL_Y + 20.0f + 16.0f); }
+
+static int path_is(const char *p, const char *want)
+{
+    return p && want && strcmp(p, want) == 0;
+}
+
+static int path_ends(const char *p, const char *suffix)
+{
+    size_t n, m;
+    if (!p || !suffix) return 0;
+    n = strlen(p);
+    m = strlen(suffix);
+    return n >= m && strcmp(p + n - m, suffix) == 0;
+}
+
+static void make_dir(const char *p)
+{
+    if (!p || !*p) return;
+#ifdef _WIN32
+    _mkdir(p);
+#else
+    mkdir(p, 0755);
+#endif
+}
+
+static void make_file(const char *p, const char *body)
+{
+    FILE *f = p ? fopen(p, "wb") : nullptr;
+    if (!f) {
+        printf("could not create fixture %s\n", p);
+        return;
+    }
+    if (body) fwrite(body, 1, strlen(body), f);
+    fclose(f);
+}
+
+/* build/fb_fixture/{a.zip, b.txt, sub/c.zip, nav/only.zip, many/p00..p15.zip} */
+static void make_fixtures(void)
+{
+    std::string root = g_base;
+    int i;
+    char name[64];
+    root += "build/fb_fixture";
+    make_dir("C:/Users/sergi/Homestead/code/moonwalkerRecomp");
+    make_dir("C:/Users/sergi/Homestead/code/moonwalkerRecomp/build");
+    make_dir(root.c_str());
+    make_dir((root + "/sub").c_str());
+    make_dir((root + "/nav").c_str());
+    make_dir((root + "/many").c_str());
+    make_file((root + "/a.zip").c_str(), "PK\x05\x06fixture");
+    make_file((root + "/b.txt").c_str(), "not a rom archive");
+    make_file((root + "/sub/c.zip").c_str(), "PK\x05\x06fixture");
+    make_file((root + "/nav/only.zip").c_str(), "PK\x05\x06fixture");
+    /* More entries than the ten visible rows, so nav has to scroll. */
+    for (i = 0; i < 16; i++) {
+        snprintf(name, sizeof(name), "/many/p%02d.zip", i);
+        make_file((root + name).c_str(), "PK\x05\x06fixture");
+    }
+}
+
+static void fb_open(const char *dir)
+{
+    memset(&g_fb, 0, sizeof(g_fb));
+    g_fb.active = 1;
+    snprintf(g_fb.cwd, sizeof(g_fb.cwd), "%s", dir);
+    g_fb_base = dir;
+    pump();
+}
+
+static void run_browse(void)
+{
+    g_launcher = 0;
+    g_open = 0;
+    make_fixtures();
+
+    fb_open(FB_ROOT);
+    check(g_fb.active == 1, "browser draws with active = 1");
+    check(g_fb.done == 0, "a freshly opened browser has no selection");
+    check(path_is(g_fb.cwd, FB_ROOT), "the host-set cwd is kept");
+    shot("f0_open");
+
+    /* Rows at the fixture root, sorted: .. , many , nav , sub , a.zip , b.txt */
+    click(fb_row_x(), fb_row_y(4));
+    check(g_fb.done == 1, "clicking a.zip sets done");
+    check(path_ends(g_fb.selection, "/a.zip"),
+          "the selection is the absolute a.zip path");
+    check(g_fb.active == 1, "choosing a target leaves the host to close the panel");
+    shot("f1_selected");
+
+    fb_open(FB_ROOT);
+    click(fb_row_x(), fb_row_y(5));
+    check(g_fb.done == 0, "a .txt row is listed but not selectable");
+    check(path_is(g_fb.cwd, FB_ROOT), "a .txt click does not navigate");
+
+    /* Directories enter, ".." walks back out. */
+    fb_open(FB_ROOT);
+    click(fb_row_x(), fb_row_y(3));
+    check(path_ends(g_fb.cwd, "/sub"), "clicking sub enters the directory");
+    check(g_fb.done == 0, "entering a directory is not a selection");
+    shot("f2_sub");
+    click(fb_row_x(), fb_row_y(0));
+    check(path_is(g_fb.cwd, FB_ROOT), "the .. row walks back to the parent");
+    check(g_fb.done == 0, "walking up is not a selection");
+
+    /* The current folder is itself a target (roms/ is a valid archive path). */
+    fb_open(FB_ROOT);
+    click(fb_select_x(), fb_btn_cy());
+    check(g_fb.done == 1, "SELECT THIS FOLDER selects the current directory");
+    check(path_is(g_fb.selection, FB_ROOT),
+          "the folder selection is the absolute cwd");
+
+    fb_open(FB_ROOT);
+    click(fb_close_x(), fb_btn_cy());
+    check(g_fb.active == 0 && g_fb.done == 0,
+          "CLOSE hides the browser without a selection");
+
+    fb_open(FB_ROOT);
+    click(fb_x_x(), fb_x_y());
+    check(g_fb.active == 0 && g_fb.done == 0, "the X hides the browser too");
+
+    /* Gamepad: nav reaches a row and A activates it, no mouse event at all.
+     * nav/ holds .. and only.zip, so one Down from the nav init lands on the
+     * zip (the same first-move rule the launcher nav mode relies on). */
+    g_pad_capability = 1;
+    fb_open(FB_NAV);
+    shot("f3_nav_open");
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    check(ImGui::IsAnyItemFocused(), "the D-pad puts a focus ring on a browser row");
+    shot("f4_nav_focus");
+    pad_tap(SDL_CONTROLLER_BUTTON_A);
+    check(g_fb.done == 1 && path_ends(g_fb.selection, "/only.zip"),
+          "D-pad + A selects a zip with no mouse event");
+
+    /* More entries than the ten visible rows: the nav cursor has to scroll the
+     * list and still reach files past the first viewport.  Up to the top
+     * first, so the Down count does not depend on the previous cursor. */
+    fb_open(FB_MANY);
+    for (int i = 0; i < 3; i++) pad_tap(SDL_CONTROLLER_BUTTON_DPAD_UP);
+    for (int i = 0; i < 15; i++) pad_tap(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    shot("f5_nav_scrolled");
+    pad_tap(SDL_CONTROLLER_BUTTON_A);
+    {
+        int idx = -1;
+        if (g_fb.done && strlen(g_fb.selection) > 6)
+            idx = atoi(g_fb.selection + strlen(g_fb.selection) - 6);
+        printf("long-list nav landed on p%d.zip\n", idx);
+        check(g_fb.done == 1 && idx >= 10 && path_ends(g_fb.selection, ".zip"),
+              "nav scrolls a long folder past the first visible page");
+    }
+    g_pad_capability = 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *mode = argc > 2 ? argv[2] : "panel";
@@ -633,6 +826,8 @@ int main(int argc, char **argv)
         run_pads();
     else if (!strcmp(mode, "nav"))
         run_nav();
+    else if (!strcmp(mode, "browse"))
+        run_browse();
     else
         run_panel();
 

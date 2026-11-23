@@ -69,6 +69,23 @@ void mw_ui_draw_cheats(mw_ui *ui, mw_cheats *cheats, int *open);
 
 void mw_ui_draw_fps(mw_ui *ui, float fps);
 
+/* In-UI archive browser (the fallback for hosts whose mw_host_browse_archive
+ * declines: Linux/SteamOS and Android).  The host opens it by setting active,
+ * done = 0 and cwd (defaults to base when empty); the panel clears active on
+ * CLOSE/X, and sets done plus an absolute selection[] when a .zip file or a
+ * directory (e.g. roms/) is chosen.  Directories are enterable, ".." walks up,
+ * entries are sorted (directories first, case-insensitive) and every row is a
+ * full-width target that the gamepad nav cursor and touch both reach. */
+typedef struct {
+    int active;            /* host sets 1 to open; panel clears when done */
+    int done;              /* 1 when selection[] is valid */
+    char cwd[2048];
+    char selection[2048];  /* absolute path of the chosen .zip or dir */
+} mw_file_browser;
+
+/* Draws over the launcher while fb->active. */
+void mw_ui_file_browser(mw_ui *ui, mw_file_browser *fb, const char *base);
+
 #ifdef __cplusplus
 }
 #endif
