@@ -1,5 +1,6 @@
 # Build artifacts and binaries
 build/
+build-linux/
 build_trace/
 build_snd/
 build_right/

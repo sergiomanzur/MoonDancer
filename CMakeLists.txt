@@ -65,7 +65,7 @@ endif()
 
 option(MW_BUILD_SDL "Build the SDL2 front end" ON)
 if(MW_BUILD_SDL)
-    if(NOT SDL2_DIR AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sdl2_dl/SDL2-2.30.11/x86_64-w64-mingw32/lib/cmake/SDL2")
+    if(WIN32 AND NOT SDL2_DIR AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/sdl2_dl/SDL2-2.30.11/x86_64-w64-mingw32/lib/cmake/SDL2")
         set(SDL2_DIR "${CMAKE_SOURCE_DIR}/third_party/sdl2_dl/SDL2-2.30.11/x86_64-w64-mingw32/lib/cmake/SDL2")
     endif()
     find_package(SDL2 CONFIG QUIET)

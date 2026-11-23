@@ -1,6 +1,8 @@
 #ifndef MW_HOST_PORT_H
 #define MW_HOST_PORT_H
 
+#include <SDL.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -20,6 +22,16 @@ void mw_host_extract_assets(void);
  * the launcher calls it directly and owns SDL_Init/SDL_Quit. Returns 0 on a
  * clean exit, non-zero on a startup failure. */
 int mw_game_main(int argc, char **argv);
+/* 1 = a native dialog filled out[cap] (Windows GetOpenFileNameW, verbatim
+ * current behavior). 0 = host declined: caller opens the in-UI browser. */
+int mw_host_browse_archive(SDL_Window *window, char *out, int cap);
+/* Launch the game; blocks until it exits, returns its exit code.
+ * Windows: current CreateProcessW + AllowSetForegroundWindow, hidden-after-
+ * grant, verbatim. Linux: fork + execl of "mwalk" beside the launcher.
+ * Android: in-process mw_game_main (added in Task 8's build config). */
+int mw_host_spawn_game(const char *base, const char *archive, SDL_Window *self);
+/* Native dark title bar where the host supports one; no-op elsewhere. */
+void mw_host_dark_titlebar(SDL_Window *window);
 
 #ifdef __cplusplus
 }
