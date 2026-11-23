@@ -31,8 +31,11 @@ struct mw_ui {
     float dpi_scale;
     float layout_scale;
     /* Overlay navigation (MW_UI_TAB_*) and the armed rebinding capture, so the
-     * CONTROLLERS panel can highlight the row that is waiting for input. */
+     * CONTROLLERS panel can highlight the row that is waiting for input.
+     * tab_count is 3 in the game overlay (SETTINGS/CONTROLLERS/CHEATS) and 2
+     * in the launcher, whose SETTINGS panel passes in_game == 0. */
     int tab;
+    int tab_count;
     int cap_player;
     int cap_action;
     int cap_pad;
@@ -400,16 +403,21 @@ const char *const k_action_names[MW_IN_ACTIONS] = {
     "UP", "DOWN", "LEFT", "RIGHT", "B1", "B2", "B3"
 };
 
-/* Two overlay nav chips drawn by both panels.  Clicking one switches the tab
- * the host dispatches on next frame. */
+/* Overlay nav chips drawn by every panel.  Clicking one switches the tab the
+ * host dispatches on next frame.  The launcher is two chips (SETTINGS,
+ * CONTROLLERS); the game overlay adds CHEATS as the third. */
 void overlay_tabs(mw_ui *ui, float right_x, float y, float s)
 {
-    static const char *const labels[2] = { "SETTINGS", "CONTROLLERS" };
+    static const char *const labels[3] = { "SETTINGS", "CONTROLLERS", "CHEATS" };
+    int count = ui->tab_count;
+    if (count < 2) count = 2;
+    if (count > 3) count = 3;
     const float cw = 124.0f * s, ch = 28.0f * s, gap = 6.0f * s;
-    float start = right_x - (2.0f * cw + gap);
+    /* Leave a little air before the X button that sits at right_x. */
+    float start = right_x - ((float)count * cw + (float)(count - 1) * gap + 10.0f * s);
     ImDrawList *dl = ImGui::GetWindowDrawList();
 
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < count; i++) {
         ImVec2 p(start + i * (cw + gap), y);
         char id[32];
         ImVec2 ts;
@@ -589,6 +597,7 @@ extern "C" mw_ui *mw_ui_create(SDL_Window *window, SDL_Renderer *renderer,
     ui->layout_scale = 1.0f;
     ui->dpi_scale = 1.0f;
     ui->tab = MW_UI_TAB_SETTINGS;
+    ui->tab_count = 2;
     ui->cap_player = -1;
     ui->cap_action = -1;
     ui->cap_pad = 0;
@@ -948,8 +957,9 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
                  ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
                  ImGuiWindowFlags_NoBackground);
 
-    /* SETTINGS / CONTROLLERS are tabs of the one overlay; the host draws the
-     * panel mw_ui_tab() names on the next frame. */
+    /* SETTINGS / CONTROLLERS (plus CHEATS in game) are tabs of the one overlay;
+     * the host draws the panel mw_ui_tab() names on the next frame. */
+    ui->tab_count = in_game ? 3 : 2;
     overlay_tabs(ui, panel.x + pw - 54 * s, panel.y + 20 * s, s);
 
     volume_row(ui, settings, ImVec2(px, y_audio + 22 * s), pw - 76 * s, s, changed);
@@ -1295,6 +1305,121 @@ extern "C" void mw_ui_draw_controllers(mw_ui *ui, mw_settings *settings,
     /* No capture may outlive the panel: closing it here disarms immediately,
      * and the host repeats the disarm for closes it performs itself. */
     if (!*open) mw_input_cancel_capture();
+}
+
+extern "C" void mw_ui_draw_cheats(mw_ui *ui, mw_cheats *cheats, int *open)
+{
+    if (!ui || !cheats || !open) return;
+    ImGuiIO &io = ImGui::GetIO();
+    float w = io.DisplaySize.x, h = io.DisplaySize.y;
+    float s = ui_scale(ui);
+    ImDrawList *bg = ImGui::GetBackgroundDrawList();
+
+    ui->tab_count = 3;
+
+    bg->AddRectFilled(ImVec2(0, 0), ImVec2(w, h), IM_COL32(2, 4, 10, 214));
+    for (float y = 0; y < h; y += 3.0f * s)
+        bg->AddLine(ImVec2(0, y), ImVec2(w, y), IM_COL32(0, 0, 0, 16), 1.0f);
+
+    float pw = 780 * s, ph = 700 * s;
+    ImVec2 panel((w - pw) * 0.5f, (h - ph) * 0.5f);
+    draw_panel(bg, panel, ImVec2(pw, ph), 18 * s, true);
+    float px = panel.x + 38 * s;
+    float py = panel.y + 28 * s;
+    const float inner_w = pw - 76 * s;
+
+    text_spaced(bg, ui->font_small, 14 * s, ImVec2(px, py),
+                A(C_MAGENTA, 235), "CHEAT MODULE", 2.6f * s);
+    text_glow(bg, ui->font_title, 46 * s, ImVec2(px, py + 22 * s),
+              "CHEATS", IM_COL32(245, 252, 255, 255), C_MAGENTA, s);
+    bg->AddRectFilledMultiColor(ImVec2(px, py + 86 * s),
+                                ImVec2(px + inner_w, py + 88 * s),
+                                C_MAGENTA, C_CYAN, C_CYAN, C_MAGENTA);
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(w, h));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+    ImGui::Begin("##cheats_ui", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                 ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+                 ImGuiWindowFlags_NoBackground);
+
+    overlay_tabs(ui, panel.x + pw - 54 * s, panel.y + 20 * s, s);
+
+    text_spaced(bg, ui->font_small, 13 * s, ImVec2(px, py + 104 * s),
+                A(C_MAGENTA, 225), "GAMEPLAY", 2.0f * s);
+    text(bg, ui->font_small, 13 * s, ImVec2(px, py + 122 * s), A(C_MUTED, 215),
+         "GLOBAL: one toggle covers 1P, 2P and 3P. Applied after every frame.");
+
+    bool lives = cheats->infinite_lives != 0;
+    toggle_row(ui, "##cheat_lives", "INFINITE LIVES",
+               "Keeps a full spare-life stock (writes 9 lives every frame)",
+               &lives, ImVec2(px, py + 146 * s), inner_w, s, NULL);
+    cheats->infinite_lives = lives ? 1 : 0;
+
+    bool invincible = cheats->invincibility != 0;
+    toggle_row(ui, "##cheat_invincible", "INVINCIBILITY",
+               "Vitality is refilled every frame, so hits cannot kill",
+               &invincible, ImVec2(px, py + 202 * s), inner_w, s, NULL);
+    cheats->invincibility = invincible ? 1 : 0;
+
+    bool magic = cheats->infinite_magic != 0;
+    toggle_row(ui, "##cheat_magic", "INFINITE MAGIC",
+               "Dance charges are refilled every frame, so the dance is always ready",
+               &magic, ImVec2(px, py + 258 * s), inner_w, s, NULL);
+    cheats->infinite_magic = magic ? 1 : 0;
+
+    text_spaced(bg, ui->font_small, 13 * s, ImVec2(px, py + 320 * s),
+                A(C_CYAN, 225), "CREDITS", 2.0f * s);
+
+    bool credits = cheats->free_credits != 0;
+    toggle_row(ui, "##cheat_credits", "FREE CREDITS",
+               "Holds the coin slot at 9 credits, including on the attract screen",
+               &credits, ImVec2(px, py + 342 * s), inner_w, s, NULL);
+    cheats->free_credits = credits ? 1 : 0;
+
+    /* The session-only ruling has to be visible where the toggles live: a
+     * player who expects settings.ini to remember them would be surprised. */
+    {
+        ImVec2 bp(px, py + 414 * s);
+        ImVec2 bsz(inner_w, 84 * s);
+        bg->AddRectFilled(bp, ImVec2(bp.x + bsz.x, bp.y + bsz.y),
+                          IM_COL32(20, 8, 26, 210), 9 * s);
+        bg->AddRect(bp, ImVec2(bp.x + bsz.x, bp.y + bsz.y), A(C_MAGENTA, 90),
+                    9 * s, 0, 1.0f);
+        bg->AddRectFilled(ImVec2(bp.x, bp.y + 12 * s),
+                          ImVec2(bp.x + 2.5f * s, bp.y + bsz.y - 12 * s),
+                          C_MAGENTA, 1 * s);
+        text(bg, ui->font_small, 13 * s, ImVec2(bp.x + 16 * s, bp.y + 13 * s),
+             A(IM_COL32(255, 205, 240, 255), 245), "SESSION ONLY");
+        text(bg, ui->font_small, 13 * s, ImVec2(bp.x + 16 * s, bp.y + 33 * s),
+             A(C_MUTED, 230),
+             "Not saved to settings.ini. Toggles reset to off on reboot (F5)");
+        text(bg, ui->font_small, 13 * s, ImVec2(bp.x + 16 * s, bp.y + 52 * s),
+             A(C_MUTED, 230), "or when the emulator exits. Cheats never run headless.");
+    }
+
+    bg->AddRectFilled(ImVec2(px, py + 600 * s), ImVec2(px + inner_w, py + 601 * s),
+                      A(C_CYAN, 36));
+
+    if (neon_button(ui, "##cheats_settings", "OPEN SETTINGS",
+                    ImVec2(px, py + 618 * s), ImVec2(210 * s, 48 * s),
+                    BUTTON_SECONDARY, true, s))
+        ui->tab = MW_UI_TAB_SETTINGS;
+    if (neon_button(ui, "##cheats_close", "CLOSE",
+                    ImVec2(panel.x + pw - 38 * s - 210 * s, py + 618 * s),
+                    ImVec2(210 * s, 48 * s), BUTTON_PRIMARY, true, s))
+        *open = 0;
+    if (neon_button(ui, "##cheats_x", "X", ImVec2(panel.x + pw - 54 * s, panel.y + 20 * s),
+                    ImVec2(32 * s, 32 * s), BUTTON_GHOST, true, s))
+        *open = 0;
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
 }
 
 extern "C" void mw_ui_draw_fps(mw_ui *ui, float fps)

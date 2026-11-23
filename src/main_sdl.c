@@ -40,6 +40,7 @@ static uint8_t g_dsw = 0xFD;
 static s18_audio_t *g_sdl_audio;
 static SDL_AudioDeviceID g_audio_dev;
 static mw_settings g_settings;
+static mw_cheats g_cheats; /* session-only, all off; never saved */
 
 static void sdl_audio_cb(void *userdata, Uint8 *stream, int len)
 {
@@ -249,6 +250,53 @@ static void apply_shader(uint32_t *frame, int w, int h, int preset, int intensit
         uint32_t *row = frame + (size_t)y * (size_t)w;
         for (int x = 0; x < w; x += 3)
             row[x] = shade_pixel(row[x], grille_mul);
+    }
+}
+
+/* Per-frame cheat writes.  Values and addresses are the verified table in
+ * docs/cheats-addresses.md (Task 6); every offset is a byte in m->workram.
+ *
+ * Called immediately after s18_run_frame() returns, so the game reads the
+ * frozen value on its next frame.  A single write would be overwritten by the
+ * next hit/death/dance, hence one write per frame rather than "refill once".
+ *
+ * The HUD digits are drawn from the value captured at the start of the frame,
+ * so a freeze shows up one frame late.  Judge it by surviving (lives, health)
+ * or by the dance staying available, not by the digit. */
+static void cheats_apply(s18_t *m, const mw_cheats *c)
+{
+    /* Player status blocks: +0x08 lives, +0x0D player id, +0x29 magic charge.
+     * Player object blocks (+0x1C health) are 0xC0 apart. */
+    static const uint16_t k_pid[3] = { 0x1A5D, 0x1A9D, 0x1ADD };
+    static const uint16_t k_lives[3] = { 0x1A58, 0x1A98, 0x1AD8 };
+    static const uint16_t k_magic[3] = { 0x1A79, 0x1AB9, 0x1AF9 };
+    static const uint16_t k_health[3] = { 0x001C, 0x00DC, 0x019C };
+    if (!m || !c) return;
+
+    /* Credits live outside the player blocks and are also shown on the attract
+     * screen, so this one applies before a game starts too.  0x2000 is the
+     * live coin counter; 0x2029 is the DSW lives template and is never
+     * written. */
+    if (c->free_credits) m->workram[0x2000] = 9;
+
+    /* Gameplay cheats only for slots that are actually in play: the status
+     * blocks are zeroed in attract, and the player id byte (0x37/0x38/0x39)
+     * is the stable marker for "this player joined".  Writing lives/health to
+     * an idle slot would invent a phantom player row.  This is cleaner than
+     * tracking game_started (which would miss a pad-only coin+start). */
+    for (int p = 0; p < 3; p++) {
+        if (!m->workram[k_pid[p]]) continue;
+        /* Freeze 9: the counter (spare lives = value - 1) is subtracted on
+         * death, so a per-frame write keeps the player alive indefinitely.
+         * This is the freeze the doc verified. */
+        if (c->infinite_lives) m->workram[k_lives[p]] = 9;
+        /* Freeze at 0x30 under either SW2:4 vitality setting.  That is the Low
+         * max (the default DSW); on High it reads 75% but still prevents
+         * death, while 0x40 on Low would overrun the bar graphic. */
+        if (c->invincibility) m->workram[k_health[p]] = 0x30;
+        /* One dance spends one charge, so refill every frame.  5 keeps the
+         * HUD icon row inside the 1P column (9 runs into the CREDIT text). */
+        if (c->infinite_magic) m->workram[k_magic[p]] = 5;
     }
 }
 
@@ -487,6 +535,9 @@ int main(int argc, char **argv)
                                       sx, 0, sw, S18_SCREEN_H);
                 } else if (event.key.keysym.scancode == SDL_SCANCODE_F5) {
                     mw_m68k_reset(&machine);
+                    /* A reboot clears the cheats: they are session-only, and
+                     * the panel says so.  Toggles start off again after F5. */
+                    memset(&g_cheats, 0, sizeof(g_cheats));
                     paused = 0;
                 } else if (event.key.keysym.scancode == SDL_SCANCODE_F11) {
                     g_settings.fullscreen = g_settings.fullscreen ? 0 : 1;
@@ -512,6 +563,10 @@ int main(int argc, char **argv)
         if (!paused && !settings_open) {
             update_inputs(&machine);
             s18_run_frame(&machine);
+            /* Freeze order: after the frame, so the game reads the frozen
+             * values on its next frame.  Cheats are session-only; everything
+             * stays zero unless a toggle was flipped in the CHEATS panel. */
+            cheats_apply(&machine, &g_cheats);
         }
         memset(key_latch, 0, sizeof(key_latch));
         memset(key_latch, 0, sizeof(key_latch));
@@ -549,6 +604,8 @@ int main(int argc, char **argv)
             int reset_request = 0, quit_request = 0, changed = 0;
             if (mw_ui_tab(ui) == MW_UI_TAB_CONTROLLERS)
                 mw_ui_draw_controllers(ui, &g_settings, &settings_open, &changed);
+            else if (mw_ui_tab(ui) == MW_UI_TAB_CHEATS)
+                mw_ui_draw_cheats(ui, &g_cheats, &settings_open);
             else
                 mw_ui_draw_settings(ui, &g_settings, &settings_open, 1,
                                     &reset_request, &quit_request, &changed);
