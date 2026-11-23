@@ -9,6 +9,18 @@
  *                  pad-capture cancel, tab chips, close disarms capture
  *   rebind <ini>   click P1/B1 KEY, press Q, save settings.ini
  *   check  <ini>   reload the ini and assert Q (not Z) drives P1 B1
+ *   pads   <ini>   virtual pads: live names/GUIDs, assignment, pad capture
+ *   nav    <ini>   gamepad navigation: the pad walks the launcher card and the
+ *                  overlay with no mouse event, and the mouse still behaves
+ *                  exactly as before
+ *
+ * Build (from the repo root, after `cmake --build build` refreshed the libs):
+ *   g++ -std=c++17 -O2 -I src -I third_party/imgui -I third_party/imgui/backends
+ *       -I third_party/stb
+ *       -I third_party/sdl2_dl/SDL2-2.30.11/x86_64-w64-mingw32/include/SDL2
+ *       build/t5_ui_test.cpp -x c src/input.c
+ *       -L build -L third_party/sdl2_dl/SDL2-2.30.11/x86_64-w64-mingw32/lib
+ *       -lmwui -limgui -lSDL2main -lSDL2 -o build/t5_ui_test.exe
  */
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
@@ -19,6 +31,8 @@
 #include <string>
 
 #include "imgui.h"
+#include "imgui_impl_sdl2.h"
+#include "imgui_impl_sdlrenderer2.h"
 
 #include "input.h"
 #include "settings.h"
@@ -35,6 +49,14 @@ static int g_open = 1;
 static int g_changed;
 static int g_fail;
 static const char *g_pending_shot;
+
+/* nav mode: the launcher card instead of an overlay panel, and a frame loop that
+ * can pretend a gamepad backend is present (see pump). */
+static int g_launcher;
+static int g_pad_capability;
+static const char *g_archive;
+static const char *g_status;
+static int g_browse, g_start, g_open_settings, g_quit;
 
 static void check(int cond, const char *what)
 {
@@ -53,15 +75,32 @@ static void save_if_dirty(void)
 
 static void pump(void)
 {
-    mw_ui_begin(g_ui);
-    if (g_open) {
+    if (!g_pad_capability) {
+        mw_ui_begin(g_ui);
+    } else {
+        /* mw_ui_begin() is exactly these three calls. The SDL2 backend clears
+         * ImGuiBackendFlags_HasGamepad on every NewFrame when no controller is
+         * open, and ImGui polls pad state rather than reading events, so a
+         * virtual pad cannot drive it (SDL reports no button state for one).
+         * The capability is therefore asserted between the backend frame and
+         * ImGui::NewFrame(), and the pad keys are queued by hand with
+         * AddKeyEvent, which is the same call the backend makes for a real pad. */
+        ImGui_ImplSDLRenderer2_NewFrame();
+        ImGui_ImplSDL2_NewFrame();
+        ImGui::GetIO().BackendFlags |= ImGuiBackendFlags_HasGamepad;
+        ImGui::NewFrame();
+    }
+    if (g_launcher) {
+        mw_ui_draw_launcher(g_ui, &g_st, g_archive, g_status, &g_browse,
+                            &g_start, &g_open_settings, &g_quit, &g_changed);
+    } else if (g_open) {
         if (mw_ui_tab(g_ui) == MW_UI_TAB_CONTROLLERS)
             mw_ui_draw_controllers(g_ui, &g_st, &g_open, &g_changed);
         else
             mw_ui_draw_settings(g_ui, &g_st, &g_open, 0, nullptr, nullptr, &g_changed);
     }
     /* The hosts' one-line disarm cover, repeated verbatim. */
-    if (!(g_open && mw_ui_tab(g_ui) == MW_UI_TAB_CONTROLLERS))
+    if (!(g_launcher || (g_open && mw_ui_tab(g_ui) == MW_UI_TAB_CONTROLLERS)))
         mw_input_cancel_capture();
     mw_ui_end(g_ui);
 
@@ -107,6 +146,28 @@ static void click(int x, int y)
     io.AddMouseButtonEvent(0, true);
     pump();
     io.AddMouseButtonEvent(0, false);
+    pump();
+}
+
+/* ---- gamepad navigation (Task 4) ----
+ * Each press is held for one frame and released on the next, so one tap is one
+ * nav move or one nav activation. */
+static void pad_tap(SDL_GameControllerButton button)
+{
+    static const struct { SDL_GameControllerButton btn; ImGuiKey key; } map[] = {
+        { SDL_CONTROLLER_BUTTON_A,         ImGuiKey_GamepadFaceDown  },
+        { SDL_CONTROLLER_BUTTON_DPAD_UP,   ImGuiKey_GamepadDpadUp    },
+        { SDL_CONTROLLER_BUTTON_DPAD_DOWN, ImGuiKey_GamepadDpadDown  },
+        { SDL_CONTROLLER_BUTTON_DPAD_LEFT, ImGuiKey_GamepadDpadLeft  },
+        { SDL_CONTROLLER_BUTTON_DPAD_RIGHT, ImGuiKey_GamepadDpadRight },
+    };
+    ImGuiKey key = ImGuiKey_None;
+    for (int i = 0; i < (int)(sizeof(map) / sizeof(map[0])); i++)
+        if (map[i].btn == button) key = map[i].key;
+    if (key == ImGuiKey_None) return;
+    ImGui::GetIO().AddKeyEvent(key, true);
+    pump();
+    ImGui::GetIO().AddKeyEvent(key, false);
     pump();
 }
 
@@ -413,6 +474,114 @@ static void run_pads(void)
     shot("c7_padbound");
 }
 
+/* Launcher card geometry at DisplaySize 1280x720 (s = 1):
+ * panel (56,330) 500x326, px 84, py 354, field (84,382), field_w 332. */
+static int l_center(int which, int axis)
+{
+    switch (which) {
+    case 0: return axis ? 405 : 478;   /* BROWSE       428,382 100x46 */
+    case 1: return axis ? 502 : 306;   /* START GAME    84,472 444x60 */
+    case 2: return axis ? 570 : 164;   /* SETTINGS      84,548 160x44 */
+    case 3: return axis ? 570 : 330;   /* MUSIC        260,548 140x44 */
+    default: return axis ? 570 : 472;  /* QUIT         416,548 112x44 */
+    }
+}
+
+/* ---- gamepad nav: the pad alone has to reach the same callbacks a click does,
+ * and the mouse path has to be left untouched.  Focus order is ImGui's: from a
+ * fresh launcher the first D-pad press lands on START GAME, and one more Down
+ * reaches SETTINGS; in a fresh settings panel Up reaches the SETTINGS chip,
+ * Right the CONTROLLERS chip, and two Downs walk volume -> SOUND. ---- */
+static void run_nav(void)
+{
+    ImGuiIO &io = ImGui::GetIO();
+    int sound0;
+
+    /* The config contract from the brief: pad yes, keyboard arrows no. */
+    check((io.ConfigFlags & ImGuiConfigFlags_NavEnableGamepad) != 0,
+          "mw_ui_create enables gamepad navigation");
+    check((io.ConfigFlags & ImGuiConfigFlags_NavEnableKeyboard) == 0,
+          "keyboard arrows stay out of the UI (no keyboard nav)");
+
+    g_archive = "moonwalker.zip";
+    g_status = "READY";
+    g_launcher = 1;
+    g_pad_capability = 1;
+    pump();
+    shot("n0_launcher");
+
+    /* ---- the pad: START GAME, then SETTINGS, no mouse at all ---- */
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    check(g_start == 0 && g_browse == 0 && g_open_settings == 0 && g_quit == 0,
+          "D-pad alone only moves the cursor, it never activates");
+    shot("n1_cursor");
+
+    pad_tap(SDL_CONTROLLER_BUTTON_A);
+    check(g_start == 1, "D-pad + A starts the game without a mouse");
+    check(g_browse == 0 && g_open_settings == 0 && g_quit == 0,
+          "the pad activated START GAME and nothing else");
+    g_start = 0;
+
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    pad_tap(SDL_CONTROLLER_BUTTON_A);
+    check(g_open_settings == 1, "D-pad + A opens SETTINGS");
+    g_open_settings = 0;
+
+    /* ---- the overlay's tab chips ---- */
+    g_launcher = 0;
+    g_open = 1;
+    pump();
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_UP);
+    check(mw_ui_tab(g_ui) == MW_UI_TAB_SETTINGS,
+          "focus alone does not switch the overlay tab");
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_RIGHT);
+    pad_tap(SDL_CONTROLLER_BUTTON_A);
+    check(mw_ui_tab(g_ui) == MW_UI_TAB_CONTROLLERS,
+          "D-pad + A switches to the CONTROLLERS chip");
+    shot("n2_controllers");
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_LEFT);
+    pad_tap(SDL_CONTROLLER_BUTTON_A);
+    check(mw_ui_tab(g_ui) == MW_UI_TAB_SETTINGS,
+          "D-pad + A switches back to SETTINGS");
+
+    /* ---- a toggle, twice: exactly one action per press ---- */
+    sound0 = g_st.sound_on;
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    pad_tap(SDL_CONTROLLER_BUTTON_DPAD_DOWN);
+    pad_tap(SDL_CONTROLLER_BUTTON_A);
+    check(g_st.sound_on == !sound0, "A on the SOUND toggle flips it exactly once");
+    sound0 = g_st.sound_on;
+    pad_tap(SDL_CONTROLLER_BUTTON_A);
+    check(g_st.sound_on == !sound0, "a second A flips it back exactly once");
+    shot("n3_pad_toggle");
+
+    /* ---- mouse parity: same callbacks, and one click is still one action ---- */
+    g_pad_capability = 0;
+    g_open = 1;
+    pump();
+    sound0 = g_st.sound_on;
+    click(640, 247);
+    check(g_st.sound_on == !sound0, "mouse: SOUND flips exactly once per click");
+    sound0 = g_st.sound_on;
+    click(640, 247);
+    check(g_st.sound_on == !sound0, "mouse: a second click flips it back once");
+
+    g_launcher = 1;
+    g_open = 0;
+    g_start = g_browse = g_open_settings = g_quit = 0;
+    pump();
+    click(l_center(1, 0), l_center(1, 1));
+    check(g_start == 1, "mouse: START GAME still starts the game");
+    g_start = 0;
+    click(l_center(0, 0), l_center(0, 1));
+    check(g_browse == 1, "mouse: BROWSE still opens the browser");
+    g_browse = 0;
+    click(l_center(2, 0), l_center(2, 1));
+    check(g_open_settings == 1, "mouse: SETTINGS still opens the overlay");
+    g_open_settings = 0;
+    shot("n4_mouse");
+}
+
 int main(int argc, char **argv)
 {
     const char *mode = argc > 2 ? argv[2] : "panel";
@@ -462,6 +631,8 @@ int main(int argc, char **argv)
         run_rebind();
     else if (!strcmp(mode, "pads"))
         run_pads();
+    else if (!strcmp(mode, "nav"))
+        run_nav();
     else
         run_panel();
 

@@ -153,12 +153,30 @@ void draw_panel(ImDrawList *dl, ImVec2 p, ImVec2 sz, float rounding, bool strong
 
 enum ButtonKind { BUTTON_PRIMARY, BUTTON_SECONDARY, BUTTON_GHOST, BUTTON_DANGER };
 
+/* Interaction rule shared by every hand-drawn widget in this file.  The glow
+ * follows the mouse and the gamepad nav cursor; the action fires on a mouse
+ * click or a nav activation.  IsItemClicked() and IsItemActivated() are both
+ * true on the mouse-press frame (ButtonBehavior sets the active id there), so
+ * the OR stays a single trigger.  The focus half of the glow is gated on
+ * io.NavVisible because a mouse click focuses the item too: without the gate a
+ * click would leave the button lit after the pointer moved away. */
+bool item_hot()
+{
+    if (ImGui::IsItemHovered()) return true;
+    return ImGui::IsItemFocused() && ImGui::GetIO().NavVisible;
+}
+
+bool item_pressed()
+{
+    return ImGui::IsItemClicked() || ImGui::IsItemActivated();
+}
+
 bool neon_button(mw_ui *ui, const char *id, const char *label,
                  ImVec2 pos, ImVec2 sz, ButtonKind kind, bool enabled, float s)
 {
     ImGui::SetCursorScreenPos(pos);
-    ImGui::InvisibleButton(id, sz);
-    bool hovered = ImGui::IsItemHovered() && enabled;
+    ImGui::InvisibleButton(id, sz, ImGuiButtonFlags_EnableNav);
+    bool hovered = item_hot() && enabled;
     bool held = ImGui::IsItemActive() && enabled;
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float rounding = 10.0f * s;
@@ -219,16 +237,16 @@ bool neon_button(mw_ui *ui, const char *id, const char *label,
          ImVec2(pos.x + (sz.x - ts.x) * 0.5f, pos.y + (sz.y - ts.y) * 0.5f - 1.0f * s),
          text_col, label);
     if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-    return enabled && ImGui::IsItemClicked();
+    return enabled && item_pressed();
 }
 
 bool toggle_row(mw_ui *ui, const char *id, const char *label, const char *desc,
                 bool *value, ImVec2 pos, float width, float s, int *changed)
 {
     ImGui::SetCursorScreenPos(pos);
-    ImGui::InvisibleButton(id, ImVec2(width, 46.0f * s));
-    bool hovered = ImGui::IsItemHovered();
-    bool clicked = ImGui::IsItemClicked();
+    ImGui::InvisibleButton(id, ImVec2(width, 46.0f * s), ImGuiButtonFlags_EnableNav);
+    bool hovered = item_hot();
+    bool clicked = item_pressed();
     if (clicked) {
         *value = !*value;
         if (changed) *changed = 1;
@@ -270,8 +288,8 @@ bool display_mode_row(mw_ui *ui, mw_settings *settings, ImVec2 pos, float width,
         ImGui::SetCursorScreenPos(p);
         char id[32];
         snprintf(id, sizeof(id), "##display%d", i);
-        ImGui::InvisibleButton(id, ImVec2(bw, bh));
-        bool hovered = ImGui::IsItemHovered();
+        ImGui::InvisibleButton(id, ImVec2(bw, bh), ImGuiButtonFlags_EnableNav);
+        bool hovered = item_hot();
         bool selected = settings->display_mode == i;
         ImU32 fill = selected ? A(C_CYAN, 235) : IM_COL32(8, 12, 22, 235);
         if (hovered && !selected) fill = mix(fill, C_CYAN, 0.10f);
@@ -290,7 +308,7 @@ bool display_mode_row(mw_ui *ui, mw_settings *settings, ImVec2 pos, float width,
              ImVec2(p.x + (bw - ts.x) * 0.5f, p.y + (bh - ts.y) * 0.5f - 1.0f * s),
              selected ? IM_COL32(4, 9, 16, 255) : C_TEXT, labels[i]);
         if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        if (ImGui::IsItemClicked() && settings->display_mode != i) {
+        if (item_pressed() && settings->display_mode != i) {
             settings->display_mode = i;
             changed_now = true;
             if (changed) *changed = 1;
@@ -305,9 +323,13 @@ bool percent_row(mw_ui *ui, const char *id, const char *label, int *value,
 {
     if (!value) return false;
     ImGui::SetCursorScreenPos(pos);
-    ImGui::InvisibleButton(id, ImVec2(width, 52.0f * s));
-    bool hovered = ImGui::IsItemHovered();
+    ImGui::InvisibleButton(id, ImVec2(width, 52.0f * s), ImGuiButtonFlags_EnableNav);
+    bool hovered = item_hot();
     bool active = ImGui::IsItemActive();
+    /* A pad cannot drag the handle, and nav activation also sets the active id,
+     * so only a held left button may move the value.  Otherwise pressing A on a
+     * focused slider would snap it to wherever the mouse happens to rest. */
+    bool dragging = active && ImGui::IsMouseDown(ImGuiMouseButton_Left);
     ImDrawList *dl = ImGui::GetWindowDrawList();
 
     int shown = *value;
@@ -338,7 +360,7 @@ bool percent_row(mw_ui *ui, const char *id, const char *label, int *value,
                         active ? IM_COL32(235, 255, 255, 255) : IM_COL32(190, 243, 255, 255));
 
     bool changed_now = false;
-    if (active) {
+    if (dragging) {
         float mx = ImGui::GetIO().MousePos.x;
         float rel = (mx - track.x) / tw;
         rel = std::max(0.0f, std::min(1.0f, rel));
@@ -362,9 +384,9 @@ int cycle_row(mw_ui *ui, const char *id, const char *label,
               const char *fallback, ImVec2 pos, float width, float s)
 {
     ImGui::SetCursorScreenPos(pos);
-    ImGui::InvisibleButton(id, ImVec2(width, 40.0f * s));
-    bool hovered = ImGui::IsItemHovered();
-    bool clicked = ImGui::IsItemClicked();
+    ImGui::InvisibleButton(id, ImVec2(width, 40.0f * s), ImGuiButtonFlags_EnableNav);
+    bool hovered = item_hot();
+    bool clicked = item_pressed();
     ImDrawList *dl = ImGui::GetWindowDrawList();
 
     const char *shown = (index >= 0 && index < count) ? names[index] : fallback;
@@ -424,8 +446,8 @@ void overlay_tabs(mw_ui *ui, float right_x, float y, float s)
         bool hovered, selected;
         snprintf(id, sizeof(id), "##overlaytab%d", i);
         ImGui::SetCursorScreenPos(p);
-        ImGui::InvisibleButton(id, ImVec2(cw, ch));
-        hovered = ImGui::IsItemHovered();
+        ImGui::InvisibleButton(id, ImVec2(cw, ch), ImGuiButtonFlags_EnableNav);
+        hovered = item_hot();
         selected = ui->tab == i;
         dl->AddRectFilled(p, ImVec2(p.x + cw, p.y + ch),
                           selected ? A(C_CYAN, 235) : IM_COL32(8, 12, 22, 235), 6.0f * s);
@@ -437,7 +459,7 @@ void overlay_tabs(mw_ui *ui, float right_x, float y, float s)
              ImVec2(p.x + (cw - ts.x) * 0.5f, p.y + (ch - ts.y) * 0.5f - 1.0f * s),
              selected ? IM_COL32(4, 9, 16, 255) : C_TEXT, labels[i]);
         if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-        if (ImGui::IsItemClicked()) ui->tab = i;
+        if (item_pressed()) ui->tab = i;
     }
 }
 
@@ -502,9 +524,9 @@ bool binding_chip(mw_ui *ui, const char *id, const char *label, ImVec2 pos,
                   ImVec2 sz, float s, bool waiting, bool bound)
 {
     ImGui::SetCursorScreenPos(pos);
-    ImGui::InvisibleButton(id, sz);
-    bool hovered = ImGui::IsItemHovered();
-    bool clicked = ImGui::IsItemClicked();
+    ImGui::InvisibleButton(id, sz, ImGuiButtonFlags_EnableNav);
+    bool hovered = item_hot();
+    bool clicked = item_pressed();
     ImDrawList *dl = ImGui::GetWindowDrawList();
     float fs = 13.0f * s;
     ImVec2 ts = text_size(ui->font_button, fs, label);
@@ -611,7 +633,9 @@ extern "C" mw_ui *mw_ui_create(SDL_Window *window, SDL_Renderer *renderer,
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    /* Gamepad navigation only: the arrow keys and Space/Enter are game inputs
+     * during play, so keyboard navigation must stay off. */
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.IniFilename = nullptr;
     io.LogFilename = nullptr;
     io.FontGlobalScale = 1.0f / ui->dpi_scale;
@@ -628,6 +652,9 @@ extern "C" mw_ui *mw_ui_create(SDL_Window *window, SDL_Renderer *renderer,
     st.WindowPadding = ImVec2(0, 0);
     st.Colors[ImGuiCol_Text] = ImVec4(0.91f, 0.96f, 1.0f, 1.0f);
     st.Colors[ImGuiCol_WindowBg] = ImVec4(0, 0, 0, 0);
+    /* Ring ImGui draws around the gamepad-focused item: the default white would
+     * fight the neon palette, so it uses this file's cyan. */
+    st.Colors[ImGuiCol_NavCursor] = ImVec4(0.20f, 0.91f, 1.0f, 0.75f);
 
     std::string base = base_path ? base_path : "";
     if (!base.empty() && base.back() != '/' && base.back() != '\\') base += '/';
@@ -859,7 +886,7 @@ extern "C" void mw_ui_draw_launcher(mw_ui *ui, mw_settings *settings,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                  ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                  ImGuiWindowFlags_NoBackground);
 
     if (neon_button(ui, "##browse", "BROWSE", ImVec2(px + field_w + 12 * s, field.y),
@@ -963,7 +990,7 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                  ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                  ImGuiWindowFlags_NoBackground);
 
     /* SETTINGS / CONTROLLERS (plus CHEATS in game) are tabs of the one overlay;
@@ -1110,7 +1137,7 @@ extern "C" void mw_ui_draw_controllers(mw_ui *ui, mw_settings *settings,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                  ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                  ImGuiWindowFlags_NoBackground);
 
     overlay_tabs(ui, panel.x + pw - 54 * s, panel.y + 20 * s, s);
@@ -1353,7 +1380,7 @@ extern "C" void mw_ui_draw_cheats(mw_ui *ui, mw_cheats *cheats, int *open)
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                  ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
-                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                  ImGuiWindowFlags_NoBackground);
 
     overlay_tabs(ui, panel.x + pw - 54 * s, panel.y + 20 * s, s);
