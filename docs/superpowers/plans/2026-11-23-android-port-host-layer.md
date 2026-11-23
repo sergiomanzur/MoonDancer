@@ -227,7 +227,7 @@ void mw_touch_finger(int down, float x, float y, int finger_id, mw_touch_state *
 - Test: on-device checklist (this task's definition of done)
 
 **Interfaces:**
-- Produces: `mw_host_browse_archive` on Android triggers the system picker and returns 0 (the launcher's own re-scan finds the copied zip via `mw_host_base_dir`).
+- Produces: `mw_host_browse_archive` on Android launches the system picker and returns **1** ("host handled the browse flow; no path yet"), so the launcher does **not** open the in-UI browser there. The SAF result is delivered asynchronously as an `SDL_DROPFILE` event carrying the copied `files/mwalk.zip` path — the launcher's existing `SDL_DROPFILE` handler (main_launcher.c:308-313) already stores and saves it, so no new launcher code path exists on Android.
 
 - [ ] **Step 1: Implement the Java + JNI path.**
 - [ ] **Step 2: On-device checklist, each item verified by screencap/logcat and recorded in the task report:** SAF import from Downloads works and START follows; touch controls render + control P1 (dpad and both modes via the CONTROLLERS panel); touch hidden → MENU reopens overlay → TOUCH toggle restores them; coin/start by touch; cheats panel reachable + QUIT GAME returns to launcher; NVRAM: insert coins, force-stop, relaunch → credits persist; scores persist across a game restart.
