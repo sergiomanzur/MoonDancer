@@ -56,6 +56,8 @@ struct mw_ui {
     int cap_player;
     int cap_action;
     int cap_pad;
+    /* MW_UI_CAP_* bits the host declared for this environment. */
+    int caps;
 };
 
 namespace {
@@ -516,11 +518,37 @@ void overlay_tabs(mw_ui *ui, float right_x, float y, float s)
     }
 }
 
+/* Segmented selector chip (DPAD / JOYSTICK in the CONTROLLERS panel).  Same
+ * InvisibleButton + item_pressed() contract as the tab chips; the caller owns
+ * the write to *settings and the dirty flag. */
+bool mode_chip(mw_ui *ui, const char *id, const char *label, ImVec2 pos,
+               ImVec2 sz, float s, bool selected)
+{
+    ImGui::SetCursorScreenPos(pos);
+    ImGui::InvisibleButton(id, sz, ImGuiButtonFlags_EnableNav);
+    bool hovered = item_hot();
+    bool clicked = item_pressed();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    ImU32 fill = selected ? A(C_CYAN, 235) : IM_COL32(8, 12, 22, 235);
+    if (hovered && !selected) fill = mix(fill, C_CYAN, 0.10f);
+    dl->AddRectFilled(pos, ImVec2(pos.x + sz.x, pos.y + sz.y), fill, 6.0f * s);
+    dl->AddRect(pos, ImVec2(pos.x + sz.x, pos.y + sz.y),
+                selected ? A(IM_COL32(210, 255, 255, 255), 245)
+                         : A(C_CYAN, hovered ? 150 : 60),
+                6.0f * s, 0, selected ? 1.4f : 1.0f);
+    float fs = 14.0f * s;
+    ImVec2 ts = text_size(ui->font_button, fs, label);
+    text(dl, ui->font_button, fs,
+         ImVec2(pos.x + (sz.x - ts.x) * 0.5f, pos.y + (sz.y - ts.y) * 0.5f - 1.0f * s),
+         selected ? IM_COL32(4, 9, 16, 255) : C_TEXT, label);
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return clicked;
+}
+
 struct ctl_device {
     char guid[33];
     std::string name;
 };
-
 /* Connected game controllers offered by the assignment chip.  Deduped by GUID
  * because the schema stores a GUID, not an instance: two identical pad models
  * share one GUID and therefore one selector entry. */
@@ -765,6 +793,7 @@ extern "C" mw_ui *mw_ui_create(SDL_Window *window, SDL_Renderer *renderer,
     ui->cap_player = -1;
     ui->cap_action = -1;
     ui->cap_pad = 0;
+    ui->caps = 0;
 
     int ww = 0, wh = 0, ow = 0, oh = 0;
     SDL_GetWindowSize(window, &ww, &wh);
@@ -1049,19 +1078,33 @@ extern "C" void mw_ui_draw_launcher(mw_ui *ui, mw_settings *settings,
         *start = 1;
 
     if (neon_button(ui, "##settings", "SETTINGS", ImVec2(px, py + 194 * s),
-                    ImVec2(160 * s, 44 * s), BUTTON_SECONDARY, true, s) && open_settings)
+                    ImVec2(120 * s, 44 * s), BUTTON_SECONDARY, true, s) && open_settings)
         *open_settings = 1;
     {
         bool music_on = settings && settings->music_on;
         if (neon_button(ui, "##music", music_on ? "MUSIC ON" : "MUSIC OFF",
-                        ImVec2(px + 176 * s, py + 194 * s), ImVec2(140 * s, 44 * s),
+                        ImVec2(px + 132 * s, py + 194 * s), ImVec2(100 * s, 44 * s),
                         music_on ? BUTTON_SECONDARY : BUTTON_GHOST, true, s) && settings) {
             settings->music_on = music_on ? 0 : 1;
             if (changed) *changed = 1;
         }
     }
-    if (neon_button(ui, "##quit", "QUIT", ImVec2(px + 332 * s, py + 194 * s),
-                    ImVec2(112 * s, 44 * s), BUTTON_DANGER, true, s) && quit)
+    /* TOUCH sits beside MUSIC and follows it exactly: straight into *settings
+     * plus the dirty flag, so the host persists it on its normal timer.  It is
+     * meaningful on every platform -- on desktop it gates the dormant
+     * touch-capable path, and the value travels with settings.ini to the
+     * device it is copied to. */
+    {
+        bool touch_on = settings && settings->touch_on;
+        if (neon_button(ui, "##touch", touch_on ? "TOUCH ON" : "TOUCH OFF",
+                        ImVec2(px + 244 * s, py + 194 * s), ImVec2(100 * s, 44 * s),
+                        touch_on ? BUTTON_SECONDARY : BUTTON_GHOST, true, s) && settings) {
+            settings->touch_on = touch_on ? 0 : 1;
+            if (changed) *changed = 1;
+        }
+    }
+    if (neon_button(ui, "##quit", "QUIT", ImVec2(px + 356 * s, py + 194 * s),
+                    ImVec2(84 * s, 44 * s), BUTTON_DANGER, true, s) && quit)
         *quit = 1;
 
     text_spaced(bg, ui->font_small, 14.0f * s, ImVec2(px, py + 252 * s),
@@ -1179,12 +1222,17 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
              "Intensity applies to SCANLINES and CRT.");
     }
 
-    if (resolution_row(ui, settings, ImVec2(col2, vrow), col_w, s) && changed)
-        *changed = 1;
+    if (!(ui->caps & MW_UI_CAP_NO_RESOLUTION)) {
+        if (resolution_row(ui, settings, ImVec2(col2, vrow), col_w, s) && changed)
+            *changed = 1;
+    }
 
     bool integer = settings->integer_scale != 0;
+    /* With the window presets gone (phone screen), INTEGER SCALING moves up to
+     * keep the VIDEO column compact instead of leaving a hole. */
+    float integer_y = vrow + ((ui->caps & MW_UI_CAP_NO_RESOLUTION) ? 0.0f : 50.0f * s);
     if (toggle_row(ui, "##integer", "INTEGER SCALING", "Pixel-perfect whole-number scaling",
-                   &integer, ImVec2(col2, vrow + 50 * s), col_w, s, changed))
+                   &integer, ImVec2(col2, integer_y), col_w, s, changed))
         settings->integer_scale = integer ? 1 : 0;
 
     bool fps = settings->show_fps != 0;
@@ -1423,9 +1471,38 @@ extern "C" void mw_ui_draw_controllers(mw_ui *ui, mw_settings *settings,
         }
     }
 
+    /* ---- touch controls (Task 7) ----
+     * Same straight-through contract as the rest of the panel: the widgets
+     * write *settings and set *changed, and the host persists on its dirty
+     * timer.  The TOUCH switch and the DPAD/JOYSTICK selector share one line
+     * between the rebind table and the capture banner. */
+    {
+        float ty = py + 470 * s;
+        bool touch = settings->touch_on != 0;
+        if (toggle_row(ui, "##touch_on", "ON-SCREEN TOUCH",
+                       "MENU stays available when the layer is hidden",
+                       &touch, ImVec2(px, ty), 460 * s, s, changed))
+            settings->touch_on = touch ? 1 : 0;
+
+        text(bg, ui->font_small, 12 * s, ImVec2(px + 478 * s, ty + 10 * s),
+             A(C_MUTED, 225), "MODE");
+        if (mode_chip(ui, "##touch_dpad", "DPAD", ImVec2(px + 530 * s, ty + 8 * s),
+                      ImVec2(100 * s, 30 * s), s,
+                      settings->touch_mode == MW_TOUCH_DPAD)) {
+            settings->touch_mode = MW_TOUCH_DPAD;
+            if (changed) *changed = 1;
+        }
+        if (mode_chip(ui, "##touch_stick", "JOYSTICK", ImVec2(px + 638 * s, ty + 8 * s),
+                      ImVec2(140 * s, 30 * s), s,
+                      settings->touch_mode != MW_TOUCH_DPAD)) {
+            settings->touch_mode = MW_TOUCH_STICK;
+            if (changed) *changed = 1;
+        }
+    }
+
     /* Capture banner.  Same strip is the permanent hint when idle. */
     {
-        float by = py + 500 * s;
+        float by = py + 524 * s;
         ImVec2 bp(px, by);
         ImVec2 bsz(inner_w, 44 * s);
         float pulse = 0.62f + 0.38f * sinf((float)ImGui::GetTime() * 4.0f);
@@ -1456,7 +1533,7 @@ extern "C" void mw_ui_draw_controllers(mw_ui *ui, mw_settings *settings,
         }
     }
 
-    text(bg, ui->font_small, 13 * s, ImVec2(px, py + 560 * s),
+    text(bg, ui->font_small, 13 * s, ImVec2(px, py + 572 * s),
          IM_COL32(158, 182, 202, 255),
          "P3 START shares the coin-3 bit (0x80); P3 BACK is unmapped by default.  "
          "Bindings save to settings.ini.");
@@ -1787,6 +1864,297 @@ extern "C" void mw_ui_file_browser(mw_ui *ui, mw_file_browser *fb, const char *b
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar();
+}
+
+/* ---------------- on-screen touch layer (Task 7) ----------------
+ *
+ * Everything here is procedural draw-list geometry in the same neon palette as
+ * the rest of the front end: no image assets, and every position comes from
+ * the MW_TOUCH_* constants in touch_controls.h, so the drawing and the input
+ * module's hit tests can never drift apart.  Icons are chosen to say what the
+ * button does without reading a label: a fist punches, a rising figure jumps,
+ * sparkles cast the dance magic. */
+
+namespace {
+
+/* Fist = punch (B1): three knuckle bars over a palm block with a thumb. */
+void touch_icon_fist(ImDrawList *dl, ImVec2 c, float u, ImU32 col)
+{
+    float bw = u * 0.42f, bh = u * 0.95f;
+    for (int i = 0; i < 3; i++)
+        dl->AddRectFilled(ImVec2(c.x - u * 0.78f + i * u * 0.52f, c.y - u * 0.80f),
+                          ImVec2(c.x - u * 0.78f + i * u * 0.52f + bw, c.y - u * 0.80f + bh),
+                          col, u * 0.18f);
+    dl->AddRectFilled(ImVec2(c.x - u * 0.90f, c.y - u * 0.10f),
+                      ImVec2(c.x + u * 0.90f, c.y + u * 0.78f), col, u * 0.24f);
+    dl->AddCircleFilled(ImVec2(c.x - u * 0.78f, c.y + u * 0.36f), u * 0.30f, col);
+}
+
+/* Rising figure = jump (B2): head, body, raised V arms and spread legs. */
+void touch_icon_jump(ImDrawList *dl, ImVec2 c, float u, ImU32 col)
+{
+    float th = u * 0.22f;
+    dl->AddCircleFilled(ImVec2(c.x, c.y - u * 0.72f), u * 0.28f, col);
+    dl->AddLine(ImVec2(c.x, c.y - u * 0.38f), ImVec2(c.x, c.y + u * 0.18f), col, th);
+    dl->AddLine(ImVec2(c.x, c.y - u * 0.26f), ImVec2(c.x - u * 0.62f, c.y - u * 0.78f), col, th);
+    dl->AddLine(ImVec2(c.x, c.y - u * 0.26f), ImVec2(c.x + u * 0.62f, c.y - u * 0.78f), col, th);
+    dl->AddLine(ImVec2(c.x, c.y + u * 0.16f), ImVec2(c.x - u * 0.42f, c.y + u * 0.80f), col, th);
+    dl->AddLine(ImVec2(c.x, c.y + u * 0.16f), ImVec2(c.x + u * 0.42f, c.y + u * 0.80f), col, th);
+}
+
+/* Sparkles = magic (B3): one six-point star with two small companions. */
+void touch_icon_magic(ImDrawList *dl, ImVec2 c, float u, ImU32 col)
+{
+    float R = u * 0.72f, r = u * 0.26f;
+    dl->AddTriangleFilled(ImVec2(c.x, c.y - R), ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), col);
+    dl->AddTriangleFilled(ImVec2(c.x, c.y + R), ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), col);
+    dl->AddTriangleFilled(ImVec2(c.x - R, c.y), ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), col);
+    dl->AddTriangleFilled(ImVec2(c.x + R, c.y), ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), col);
+    dl->AddTriangleFilled(ImVec2(c.x + u * 0.62f, c.y - u * 0.68f),
+                          ImVec2(c.x + u * 0.50f, c.y - u * 0.52f),
+                          ImVec2(c.x + u * 0.74f, c.y - u * 0.52f), col);
+    dl->AddTriangleFilled(ImVec2(c.x + u * 0.62f, c.y - u * 0.36f),
+                          ImVec2(c.x + u * 0.50f, c.y - u * 0.52f),
+                          ImVec2(c.x + u * 0.74f, c.y - u * 0.52f), col);
+    dl->AddCircleFilled(ImVec2(c.x - u * 0.62f, c.y + u * 0.58f), u * 0.11f, col);
+}
+
+/* One round action button inside its MW_TOUCH_B* hit rect.  glyph: 0 fist,
+ * 1 rising figure, 2 sparkles.  pressed lights the fill, brightens the glyph
+ * and scales the disc by 8% so contact is unmistakable. */
+void touch_action_button(mw_ui *ui, ImDrawList *dl, float W, float H, float s,
+                         float nx0, float ny0, float nx1, float ny1,
+                         int pressed, int glyph, const char *label)
+{
+    ImVec2 c((nx0 + nx1) * 0.5f * W, (ny0 + ny1) * 0.5f * H - 7.0f * s);
+    float rw = (nx1 - nx0) * W, rh = (ny1 - ny0) * H;
+    float r = std::min(rw, rh) * 0.36f * (pressed ? 1.08f : 1.0f);
+    ImU32 ring = pressed ? A(IM_COL32(220, 255, 255, 255), 250) : A(C_CYAN, 150);
+    ImU32 fill = pressed ? IM_COL32(20, 58, 76, 245) : IM_COL32(7, 12, 22, 215);
+    ImU32 ink = pressed ? IM_COL32(240, 255, 255, 255) : A(C_TEXT, 238);
+
+    if (pressed)
+        dl->AddCircleFilled(c, r * 1.22f, A(C_CYAN, 40));
+    dl->AddCircleFilled(c, r, fill);
+    dl->AddCircle(c, r, ring, 0, pressed ? 2.2f * s : 1.5f * s);
+    if (glyph == 0)
+        touch_icon_fist(dl, c, r * 0.52f, ink);
+    else if (glyph == 1)
+        touch_icon_jump(dl, c, r * 0.52f, ink);
+    else
+        touch_icon_magic(dl, c, r * 0.52f, ink);
+
+    float fs = 11.0f * s;
+    ImVec2 ts = text_size(ui->font_small, fs, label);
+    text(dl, ui->font_small, fs,
+         ImVec2(c.x - ts.x * 0.5f, (ny1 * H) - ts.y - 5.0f * s),
+         pressed ? A(C_CYAN, 245) : A(C_MUTED, 225), label);
+}
+
+/* MENU pause-bars corner button.  Always drawn, enabled or not: it is the
+ * escape hatch back to the CONTROLLERS toggle (Review Focus #2). */
+void touch_menu_button(mw_ui *ui, ImDrawList *dl, float W, float H, float s, int enabled)
+{
+    ImVec2 m0(MW_TOUCH_MENU_X0 * W, MW_TOUCH_MENU_Y0 * H);
+    ImVec2 m1(MW_TOUCH_MENU_X1 * W, MW_TOUCH_MENU_Y1 * H);
+    float rr = 9.0f * s;
+
+    dl->AddRectFilled(m0, m1, enabled ? IM_COL32(7, 12, 22, 225)
+                                      : IM_COL32(7, 10, 20, 170), rr);
+    dl->AddRect(m0, m1, enabled ? A(C_CYAN, 210) : A(C_DIM, 180), rr, 0, 1.4f);
+
+    /* pause-bars = MENU (opens/closes this overlay) */
+    float bw = std::max(3.0f * s, (m1.x - m0.x) * 0.13f);
+    float bh = (m1.y - m0.y) * 0.44f;
+    float gap = bw * 0.85f;
+    float cx = (m0.x + m1.x) * 0.5f, cy = (m0.y + m1.y) * 0.5f;
+    ImU32 bar = enabled ? A(C_CYAN, 240) : A(C_DIM, 220);
+    dl->AddRectFilled(ImVec2(cx - gap - bw, cy - bh * 0.5f),
+                      ImVec2(cx - gap, cy + bh * 0.5f), bar, 1.5f * s);
+    dl->AddRectFilled(ImVec2(cx + gap, cy - bh * 0.5f),
+                      ImVec2(cx + gap + bw, cy + bh * 0.5f), bar, 1.5f * s);
+
+    if (!enabled) {
+        const char *hint = "TOUCH HIDDEN";
+        float fs = 13.0f * s;
+        ImVec2 ts = text_size(ui->font_small, fs, hint);
+        ImVec2 hp(m0.x - 12.0f * s - ts.x, m0.y + (m1.y - m0.y - ts.y) * 0.5f);
+        dl->AddRectFilled(ImVec2(hp.x - 7.0f * s, hp.y - 4.0f * s),
+                          ImVec2(hp.x + ts.x + 7.0f * s, hp.y + ts.y + 4.0f * s),
+                          IM_COL32(2, 4, 10, 175), 6.0f * s);
+        dl->AddRectFilled(ImVec2(hp.x - 7.0f * s, hp.y + 1.0f * s),
+                          ImVec2(hp.x - 5.0f * s, hp.y + ts.y - 1.0f * s),
+                          A(C_MAGENTA, 180), 1.0f * s);
+        text(dl, ui->font_small, fs, hp, A(C_MUTED, 235), hint);
+    }
+}
+
+/* Fixed D-pad cross: upper/lower and left/right arms are lit independently by
+ * the held direction bits, derived from the same MW_IN_* actions the module
+ * emits. */
+void touch_dpad(ImDrawList *dl, float W, float H, float s, uint8_t actions)
+{
+    ImVec2 p0(MW_TOUCH_DPAD_X0 * W, MW_TOUCH_DPAD_Y0 * H);
+    ImVec2 p1(MW_TOUCH_DPAD_X1 * W, MW_TOUCH_DPAD_Y1 * H);
+    ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+    float aw = (p1.x - p0.x) * 0.30f;
+    float ah = (p1.y - p0.y) * 0.30f;
+    float inset = 6.0f * s;
+
+    auto limb = [&](ImVec2 a, ImVec2 b, int on) {
+        dl->AddRectFilled(a, b, on ? A(C_CYAN, 135) : A(C_CYAN, 24), 7.0f * s);
+        dl->AddRect(a, b, on ? A(C_CYAN, 245) : A(C_CYAN, 92), 7.0f * s, 0,
+                    on ? 1.6f : 1.1f);
+    };
+    limb(ImVec2(c.x - aw * 0.5f, p0.y + inset), ImVec2(c.x + aw * 0.5f, c.y),
+         (actions & MW_IN_UP) != 0);
+    limb(ImVec2(c.x - aw * 0.5f, c.y), ImVec2(c.x + aw * 0.5f, p1.y - inset),
+         (actions & MW_IN_DOWN) != 0);
+    limb(ImVec2(p0.x + inset, c.y - ah * 0.5f), ImVec2(c.x, c.y + ah * 0.5f),
+         (actions & MW_IN_LEFT) != 0);
+    limb(ImVec2(c.x, c.y - ah * 0.5f), ImVec2(p1.x - inset, c.y + ah * 0.5f),
+         (actions & MW_IN_RIGHT) != 0);
+    dl->AddCircleFilled(c, aw * 0.55f, IM_COL32(6, 10, 18, 235));
+    dl->AddCircle(c, aw * 0.55f, A(C_CYAN, 160), 0, 1.3f * s);
+}
+
+/* Floating stick.  The module anchors the stick wherever the thumb lands and
+ * reports only the offset in the frame state (stick_x/stick_y), so the draw
+ * pass shows it at the left-thumb rest anchor with that offset applied; the
+ * dead-zone circumference is drawn so the player can see where movement
+ * starts.  Before the first touch the ring is drawn dim at rest, which also
+ * keeps the thumb area visible on the very first frame. */
+void touch_stick(ImDrawList *dl, float W, float H, float s, const mw_touch_state *t)
+{
+    ImVec2 a(0.135f * W, 0.790f * H);
+    float rx = MW_TOUCH_STICK_RX * W, ry = MW_TOUCH_STICK_RY * H;
+    float r = (rx + ry) * 0.5f;
+    int active = t->stick_finger >= 0;
+    ImVec2 knob(active ? a.x + t->stick_x * rx : a.x,
+                active ? a.y + t->stick_y * ry : a.y);
+
+    dl->AddCircleFilled(a, r, active ? IM_COL32(6, 12, 22, 185)
+                                     : IM_COL32(6, 10, 18, 110));
+    dl->AddCircle(a, r, active ? A(C_CYAN, 185) : A(C_CYAN, 80), 0, 1.5f * s);
+    dl->AddCircle(a, r * MW_TOUCH_STICK_DEADZONE,
+                  A(C_CYAN, active ? 95 : 45), 0, 1.0f * s);
+    for (int i = 0; i < 4; i++) {
+        float ang = (float)i * 1.5707963f;
+        ImVec2 d(cosf(ang), sinf(ang));
+        dl->AddLine(ImVec2(a.x + d.x * r * 0.86f, a.y + d.y * r * 0.86f),
+                    ImVec2(a.x + d.x * r * 0.98f, a.y + d.y * r * 0.98f),
+                    A(C_CYAN, active ? 150 : 70), 1.4f * s);
+    }
+    dl->AddCircleFilled(knob, r * 0.34f,
+                        active ? A(C_CYAN, 215) : A(C_CYAN, 70));
+    dl->AddCircle(knob, r * 0.34f,
+                  active ? A(IM_COL32(215, 255, 255, 255), 245) : A(C_CYAN, 110),
+                  0, 1.5f * s);
+    if (active)
+        dl->AddCircleFilled(knob, r * 0.12f, IM_COL32(4, 9, 16, 255));
+}
+
+/* Bottom-centre service chips: the coin slot and the 1P START arcade button.
+ * Taps latch one frame; the latches brighten the chip for that frame. */
+void touch_coin_chip(mw_ui *ui, ImDrawList *dl, float W, float H, float s, int pressed)
+{
+    ImVec2 c0(MW_TOUCH_COIN_X0 * W, MW_TOUCH_COIN_Y0 * H);
+    ImVec2 c1(MW_TOUCH_COIN_X1 * W, MW_TOUCH_COIN_Y1 * H);
+    float cx = (c0.x + c1.x) * 0.5f;
+
+    dl->AddRectFilled(c0, c1, pressed ? IM_COL32(10, 22, 34, 240)
+                                      : IM_COL32(6, 10, 20, 210), 10.0f * s);
+    dl->AddRect(c0, c1, pressed ? A(C_CYAN, 245) : A(C_CYAN, 115), 10.0f * s, 0, 1.4f);
+
+    /* coin-slot chip: a coin dropping into the slot */
+    dl->AddCircleFilled(ImVec2(cx, c0.y + (c1.y - c0.y) * 0.30f), 8.0f * s,
+                        pressed ? A(C_CYAN, 240) : A(C_MAGENTA, 200));
+    dl->AddCircle(ImVec2(cx, c0.y + (c1.y - c0.y) * 0.30f), 8.0f * s,
+                  A(IM_COL32(220, 255, 255, 255), 235), 0, 1.4f * s);
+    dl->AddRectFilled(ImVec2(cx - 3.5f * s, c0.y + (c1.y - c0.y) * 0.47f),
+                      ImVec2(cx + 3.5f * s, c0.y + (c1.y - c0.y) * 0.77f),
+                      pressed ? A(C_CYAN, 250) : A(C_CYAN, 160), 2.5f * s);
+
+    float fs = 11.0f * s;
+    ImVec2 ts = text_size(ui->font_small, fs, "COIN");
+    text(dl, ui->font_small, fs, ImVec2(cx - ts.x * 0.5f, c1.y - ts.y - 5.0f * s),
+         pressed ? A(C_CYAN, 245) : A(C_MUTED, 225), "COIN");
+}
+
+void touch_start_chip(mw_ui *ui, ImDrawList *dl, float W, float H, float s, int pressed)
+{
+    ImVec2 c0(MW_TOUCH_START_X0 * W, MW_TOUCH_START_Y0 * H);
+    ImVec2 c1(MW_TOUCH_START_X1 * W, MW_TOUCH_START_Y1 * H);
+    float cx = (c0.x + c1.x) * 0.5f;
+
+    dl->AddRectFilled(c0, c1, pressed ? IM_COL32(34, 10, 30, 240)
+                                      : IM_COL32(8, 10, 22, 215), 10.0f * s);
+    dl->AddRect(c0, c1, pressed ? A(C_MAGENTA, 245) : A(C_MAGENTA, 130), 10.0f * s, 0, 1.4f);
+    dl->AddRectFilledMultiColor(ImVec2(c0.x + 10.0f * s, c0.y + 6.0f * s),
+                                ImVec2(c1.x - 10.0f * s, c0.y + 8.0f * s),
+                                A(C_MAGENTA, 180), A(C_CYAN, 180),
+                                A(C_CYAN, 180), A(C_MAGENTA, 180));
+
+    /* 1P START arcade button */
+    float fs1 = 12.0f * s, fs2 = 20.0f * s;
+    ImVec2 t1 = text_size(ui->font_small, fs1, "1P");
+    ImVec2 t2 = text_size(ui->font_button, fs2, "START");
+    text(dl, ui->font_small, fs1,
+         ImVec2(cx - t1.x * 0.5f, c0.y + (c1.y - c0.y) * 0.22f),
+         pressed ? A(C_CYAN, 245) : A(C_MUTED, 230), "1P");
+    text(dl, ui->font_button, fs2,
+         ImVec2(cx - t2.x * 0.5f, c0.y + (c1.y - c0.y) * 0.46f),
+         pressed ? IM_COL32(245, 255, 255, 255) : C_TEXT, "START");
+}
+
+} // namespace
+
+extern "C" void mw_ui_set_caps(mw_ui *ui, int caps)
+{
+    if (ui) ui->caps = caps;
+}
+
+extern "C" void mw_ui_draw_touch(mw_ui *ui, const mw_touch_state *t, int enabled, int mode)
+{
+    if (!ui) return;
+    ImGuiIO &io = ImGui::GetIO();
+    float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    float s = ui_scale(ui);
+    ImDrawList *dl = ImGui::GetBackgroundDrawList();
+    mw_touch_state empty;
+
+    if (!t) {
+        memset(&empty, 0, sizeof(empty));
+        empty.stick_finger = -1;
+        t = &empty;
+    }
+
+    /* The background draw list is submitted before ImGui's windows, so this
+     * layer always sits under the overlay: the overlay is the topmost layer
+     * whenever it is open, even though the host calls this after the panels. */
+    touch_menu_button(ui, dl, W, H, s, enabled);
+
+    /* Hidden layer: MENU is the only control that stays, because it is the
+     * way back to the TOUCH toggle. */
+    if (!enabled) return;
+
+    if (mode == MW_TOUCH_DPAD)
+        touch_dpad(dl, W, H, s, t->actions);
+    else
+        touch_stick(dl, W, H, s, t);
+
+    touch_action_button(ui, dl, W, H, s, MW_TOUCH_B1_X0, MW_TOUCH_B1_Y0,
+                        MW_TOUCH_B1_X1, MW_TOUCH_B1_Y1,
+                        (t->actions & MW_IN_B1) != 0, 0, "PUNCH");
+    touch_action_button(ui, dl, W, H, s, MW_TOUCH_B2_X0, MW_TOUCH_B2_Y0,
+                        MW_TOUCH_B2_X1, MW_TOUCH_B2_Y1,
+                        (t->actions & MW_IN_B2) != 0, 1, "JUMP");
+    touch_action_button(ui, dl, W, H, s, MW_TOUCH_B3_X0, MW_TOUCH_B3_Y0,
+                        MW_TOUCH_B3_X1, MW_TOUCH_B3_Y1,
+                        (t->actions & MW_IN_B3) != 0, 2, "MAGIC");
+
+    touch_coin_chip(ui, dl, W, H, s, t->coin != 0);
+    touch_start_chip(ui, dl, W, H, s, t->start != 0);
 }
 
 extern "C" void mw_ui_draw_fps(mw_ui *ui, float fps)

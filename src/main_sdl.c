@@ -524,6 +524,8 @@ int mw_game_main(int argc, char **argv)
         fprintf(stderr, "Could not initialize the settings overlay.\n");
         return 1;
     }
+    /* Desktop host: every panel row applies, no capability flags are set. */
+    mw_ui_set_caps(ui, 0);
 
     g_sdl_audio = audio;
     audio_apply(audio_on);
@@ -547,8 +549,20 @@ int mw_game_main(int argc, char **argv)
     /* Touch capability, not a guess about which window system sends finger
      * events.  SDL enumerates the Android screen and Windows touchscreens /
      * pens as touch devices and reports 0 on a non-touch desktop.  The input
-     * feed below and Task 7's draw hook both key off this same flag. */
-    const int touch_capable = SDL_GetNumTouchDevices() > 0;
+     * feed below and Task 7's draw hook both key off this same flag.
+     *
+     * MW_TOUCH_FORCE=1 is a debug-only override (any value but empty/"0"):
+     * it pretends the host is touch-capable so the control layer can be
+     * drawn, screenshotted and tuned on a non-touch dev machine.  Production
+     * builds never set it; with it set, the feed gate follows the forced
+     * capability, so mouse-synthesized finger events work as they would on a
+     * device. */
+    int touch_capable = SDL_GetNumTouchDevices() > 0;
+    {
+        const char *force = SDL_getenv("MW_TOUCH_FORCE");
+        if (force && force[0] && strcmp(force, "0") != 0)
+            touch_capable = 1;
+    }
 
     while (running) {
         SDL_Event event;
@@ -658,6 +672,22 @@ int mw_game_main(int argc, char **argv)
             applied_touch_mode = g_settings.touch_mode;
         }
         mw_touch_frame(&g_touch);
+        /* MENU invariant, enforced in one place.  The pump latches MENU
+         * unconditionally (the module must stay hit-testable), but a host with
+         * no touch device draws nothing, so an invisible tap must not open the
+         * overlay.  Zeroing the latch here makes the input latch and the
+         * drawing agree everywhere: MENU is live exactly when the MENU button
+         * is on screen, including with touch_on=0 (Review Focus #2: it is the
+         * way back to the TOUCH toggle).  MW_TOUCH_FORCE participates because
+         * it changes touch_capable. */
+        if (!touch_capable)
+            g_touch.menu = 0;
+        if (g_touch.menu) {
+            /* Exactly the F1 path: open/close the overlay, mark dirty on the
+             * close so the setting is persisted. */
+            settings_open = !settings_open;
+            if (!settings_open) settings_dirty = 1;
+        }
         {
             const int touch_feed = touch_capable && g_settings.touch_on;
             mw_input_set_touch_action(MW_IN_ACT_UP,
@@ -760,6 +790,14 @@ int mw_game_main(int argc, char **argv)
             mw_input_cancel_capture();
         if (was_open && !settings_open)
             settings_dirty = 1;
+        /* The touch layer is submitted every frame.  enabled mirrors the
+         * capability gate: with a touch-capable host and touch_on=0 it still
+         * draws the MENU button + "TOUCH HIDDEN" hint (the escape hatch), and
+         * a host without touch draws nothing at all.  Called after the panels,
+         * but on the background draw list, so it can never cover the overlay:
+         * the overlay stays the topmost layer whenever it is open. */
+        mw_ui_draw_touch(ui, &g_touch, touch_capable ? g_settings.touch_on : 0,
+                         g_settings.touch_mode);
         mw_ui_end(ui);
         SDL_RenderPresent(renderer);
 

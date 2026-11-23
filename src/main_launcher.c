@@ -156,6 +156,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "Could not initialize the launcher UI.\n");
         return 1;
     }
+    /* Desktop host: no capability flags, so the SETTINGS panel is unchanged. */
+    mw_ui_set_caps(ui, 0);
 
     char archive[2048];
     find_default_zip(base, archive, (int)sizeof(archive));

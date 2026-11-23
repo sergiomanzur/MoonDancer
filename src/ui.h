@@ -3,6 +3,7 @@
 
 #include <SDL.h>
 #include "settings.h"
+#include "touch_controls.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -25,6 +26,14 @@ typedef struct {
 mw_ui *mw_ui_create(SDL_Window *window, SDL_Renderer *renderer,
                     const char *base_path, const char *background_path);
 void mw_ui_destroy(mw_ui *ui);
+
+/* Capability flags, not forks: a host states what its environment cannot do
+ * and the affected rows disappear.  Desktop hosts pass 0 (panels unchanged).
+ * MW_UI_CAP_NO_RESOLUTION hides the SETTINGS panel's window-size presets:
+ * window geometry is meaningless on a phone screen.  FULLSCREEN stays (SDL
+ * maps it to Android immersive mode through the normal fullscreen path). */
+#define MW_UI_CAP_NO_RESOLUTION 1
+void mw_ui_set_caps(mw_ui *ui, int caps);
 
 void mw_ui_begin(mw_ui *ui);
 void mw_ui_end(mw_ui *ui);
@@ -68,6 +77,22 @@ void mw_ui_draw_controllers(mw_ui *ui, mw_settings *settings, int *open,
 void mw_ui_draw_cheats(mw_ui *ui, mw_cheats *cheats, int *open);
 
 void mw_ui_draw_fps(mw_ui *ui, float fps);
+
+/* On-screen touch controls.  Call once per frame in the game loop, after the
+ * overlay panels (the layer uses the background draw list, so it stays under
+ * the panel windows no matter when it is submitted).
+ *
+ * enabled mirrors the host's capability gate: non-zero draws the full layer
+ * (D-pad/floating stick, the three action buttons, the coin and 1P START
+ * chips); zero draws only the MENU pause-bars button and a short "TOUCH
+ * HIDDEN" hint, because MENU is the escape hatch back to the toggle and must
+ * stay visible and hittable on a touch-capable host.
+ *
+ * mode is MW_TOUCH_DPAD or MW_TOUCH_STICK.  t carries the held action bits
+ * (pressed styling), the stick offset and the MENU/coin/start latches.  Every
+ * position comes from the MW_TOUCH_* geometry in touch_controls.h, the same
+ * constants the input module hit-tests against. */
+void mw_ui_draw_touch(mw_ui *ui, const mw_touch_state *t, int enabled, int mode);
 
 /* In-UI archive browser (the fallback for hosts whose mw_host_browse_archive
  * declines: Linux/SteamOS and Android).  The host opens it by setting active,

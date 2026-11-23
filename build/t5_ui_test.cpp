@@ -20,6 +20,11 @@
  *                  listed, directories enter, ".." walks back out, .zip files
  *                  and the current folder are selectable, other files are not,
  *                  and the D-pad + A reach a row with no mouse event
+ *   touch  <ini>   Task 7 touch layer: with enabled=0 only the MENU button
+ *                  draws (vertex-zone assertions), enabled=1 draws the stick /
+ *                  D-pad, the three icon buttons and the service chips;
+ *                  MW_UI_CAP_NO_RESOLUTION hides the RESOLUTION row; the
+ *                  launcher and CONTROLLERS toggles flip settings + persist
  *
  *   mode browse drives mw_ui_file_browser() directly; the host picker contract
  *   that decides whether the launcher opens this panel at all (1 = a native
@@ -114,6 +119,27 @@ static void save_if_dirty(void)
     }
 }
 
+/* Screenshot requested through shot(): read the presented framebuffer.  Called
+ * after the draw data has been rendered, in both the normal pump and the
+ * draw-list inspection frames below. */
+static void save_pending_shot(void)
+{
+    if (!g_pending_shot) return;
+    int w = 0, h = 0;
+    char path[2048];
+    SDL_GetRendererOutputSize(g_ren, &w, &h);
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
+    if (s) {
+        SDL_RenderReadPixels(g_ren, nullptr, SDL_PIXELFORMAT_ARGB8888,
+                             s->pixels, s->pitch);
+        snprintf(path, sizeof(path), "%s/%s.bmp", g_shots, g_pending_shot);
+        SDL_SaveBMP(s, path);
+        SDL_FreeSurface(s);
+        printf("shot %s\n", path);
+    }
+    g_pending_shot = nullptr;
+}
+
 static void pump(void)
 {
     if (!g_pad_capability) {
@@ -150,19 +176,7 @@ static void pump(void)
     mw_ui_end(g_ui);
 
     if (g_pending_shot) {
-        int w = 0, h = 0;
-        char path[2048];
-        SDL_GetRendererOutputSize(g_ren, &w, &h);
-        SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32, SDL_PIXELFORMAT_ARGB8888);
-        if (s) {
-            SDL_RenderReadPixels(g_ren, nullptr, SDL_PIXELFORMAT_ARGB8888,
-                                 s->pixels, s->pitch);
-            snprintf(path, sizeof(path), "%s/%s.bmp", g_shots, g_pending_shot);
-            SDL_SaveBMP(s, path);
-            SDL_FreeSurface(s);
-            printf("shot %s\n", path);
-        }
-        g_pending_shot = nullptr;
+        save_pending_shot();
     }
     SDL_RenderPresent(g_ren);
     save_if_dirty();
@@ -360,6 +374,13 @@ static int tab_y(void) { return (int)(PANEL_Y + 34.0f); }
 static int stab_x(int i) { return (int)((1280.0f - 780.0f) * 0.5f + 780.0f - 54.0f - 254.0f + i * 130.0f + 62.0f); }
 static int close_x(void) { return (int)(PANEL_X + SCALE_W - 38.0f - 105.0f); }
 static int close_y(void) { return (int)(PY + 618.0f + 24.0f); }
+/* Task 7's touch row in the CONTROLLERS panel: ON-SCREEN TOUCH toggle and the
+ * DPAD / JOYSTICK segmented chips share one line at py + 470. */
+static int ctl_touch_x(void) { return (int)(PX + 460.0f - 54.0f + 27.0f); }
+static int ctl_row_y(void) { return (int)(PY + 470.0f + 23.0f); }
+static int ctl_mode_y(void) { return (int)(PY + 470.0f + 23.0f); }
+static int ctl_dpad_x(void) { return (int)(PX + 530.0f + 50.0f); }
+static int ctl_joy_x(void) { return (int)(PX + 638.0f + 70.0f); }
 
 static void run_rebind(void)
 {
@@ -534,15 +555,18 @@ static void run_pads(void)
 }
 
 /* Launcher card geometry at DisplaySize 1280x720 (s = 1):
- * panel (56,330) 500x326, px 84, py 354, field (84,382), field_w 332. */
+ * panel (56,330) 500x326, px 84, py 354, field (84,382), field_w 332.
+ * The Task 7 TOUCH chip sits beside MUSIC in the same 444-px button row:
+ * SETTINGS 84+0 (120), MUSIC 84+132 (100), TOUCH 84+244 (100), QUIT 84+356 (84). */
 static int l_center(int which, int axis)
 {
     switch (which) {
     case 0: return axis ? 405 : 478;   /* BROWSE       428,382 100x46 */
     case 1: return axis ? 502 : 306;   /* START GAME    84,472 444x60 */
-    case 2: return axis ? 570 : 164;   /* SETTINGS      84,548 160x44 */
-    case 3: return axis ? 570 : 330;   /* MUSIC        260,548 140x44 */
-    default: return axis ? 570 : 472;  /* QUIT         416,548 112x44 */
+    case 2: return axis ? 570 : 144;   /* SETTINGS      84,548 120x44 */
+    case 3: return axis ? 570 : 266;   /* MUSIC        216,548 100x44 */
+    case 4: return axis ? 570 : 378;   /* TOUCH        328,548 100x44 */
+    default: return axis ? 570 : 482;  /* QUIT         440,548 84x44 */
     }
 }
 
@@ -935,6 +959,200 @@ static void run_browse(void)
     g_pad_capability = 0;
 }
 
+/* ---- on-screen touch layer (Task 7) ----
+ * The draw pass submits to the background draw list, so a frame can be drawn
+ * with no window (and no launcher/overlay behind it) and its vertices counted
+ * directly.  Zones are expressed in the normalized space touch_controls.h
+ * uses, times the 1280x720 harness window. */
+static ImDrawData *g_dd;
+
+static void render_analysis_frame(void)
+{
+    ImGui::Render();
+    g_dd = ImGui::GetDrawData();
+    /* The real hosts clear before submitting the UI; the harness normally does
+     * not, so analysis frames clear here to keep their screenshots free of the
+     * previous frame's panel (and to match what the game presents). */
+    SDL_SetRenderDrawColor(g_ren, 2, 3, 8, 255);
+    SDL_RenderClear(g_ren);
+    ImGui_ImplSDLRenderer2_RenderDrawData(g_dd, g_ren);
+    save_pending_shot();
+    SDL_RenderPresent(g_ren);
+    SDL_Delay(16);
+}
+
+static void touch_frame(const mw_touch_state *t, int enabled, int mode)
+{
+    mw_ui_begin(g_ui);
+    mw_ui_draw_touch(g_ui, t, enabled, mode);
+    render_analysis_frame();
+}
+
+static int zone_vertices(float nx0, float ny0, float nx1, float ny1)
+{
+    const float W = 1280.0f, H = 720.0f;
+    int n = 0;
+    if (!g_dd) return 0;
+    for (int l = 0; l < g_dd->CmdListsCount; l++) {
+        const ImDrawList *dl = g_dd->CmdLists[l];
+        for (int v = 0; v < dl->VtxBuffer.Size; v++) {
+            const ImVec2 &p = dl->VtxBuffer[v].pos;
+            if (p.x >= nx0 * W && p.x <= nx1 * W &&
+                p.y >= ny0 * H && p.y <= ny1 * H)
+                n++;
+        }
+    }
+    return n;
+}
+
+static void run_touch(void)
+{
+    mw_touch_state t;
+    std::string ini;
+
+    g_launcher = 0;
+    g_open = 0;
+    g_fb.active = 0;
+    g_pad_capability = 0;
+    memset(&t, 0, sizeof(t));
+    t.stick_finger = -1;
+
+    /* ---- hidden layer: the MENU escape hatch is all that draws ---- */
+    g_pending_shot = "t0_hidden";
+    touch_frame(&t, 0, MW_TOUCH_STICK);
+    check(zone_vertices(MW_TOUCH_MENU_X0 - 0.004f, MW_TOUCH_MENU_Y0 - 0.004f,
+                        MW_TOUCH_MENU_X1 + 0.004f, MW_TOUCH_MENU_Y1 + 0.004f) > 0,
+          "MENU pause-bars draw near the top-right corner with enabled=0");
+    check(zone_vertices(0.0f, 0.60f, 0.30f, 1.0f) == 0,
+          "enabled=0 leaves the left control zone empty");
+    check(zone_vertices(0.74f, 0.54f, 1.0f, 1.0f) == 0,
+          "enabled=0 leaves the right control zone empty");
+
+    /* ---- full layer, stick mode, every control and latch lit ---- */
+    t.actions = MW_IN_B1 | MW_IN_B2 | MW_IN_B3 | MW_IN_UP | MW_IN_RIGHT;
+    t.stick_x = 0.62f;
+    t.stick_y = -0.45f;
+    t.stick_finger = 3;
+    t.menu = 1;
+    t.start = 1;
+    t.coin = 1;
+    g_pending_shot = "t1_stick";
+    touch_frame(&t, 1, MW_TOUCH_STICK);
+    check(zone_vertices(0.0f, 0.60f, 0.30f, 1.0f) > 0,
+          "stick mode draws geometry in the left half");
+    check(zone_vertices(0.74f, 0.54f, 1.0f, 1.0f) > 0,
+          "action buttons draw in the right half");
+    check(zone_vertices(MW_TOUCH_MENU_X0 - 0.004f, MW_TOUCH_MENU_Y0 - 0.004f,
+                        MW_TOUCH_MENU_X1 + 0.004f, MW_TOUCH_MENU_Y1 + 0.004f) > 0,
+          "MENU draws with the layer visible too");
+    check(zone_vertices(MW_TOUCH_COIN_X0, MW_TOUCH_COIN_Y0,
+                        MW_TOUCH_COIN_X1, MW_TOUCH_COIN_Y1) > 0,
+          "the coin-slot chip draws at the bottom centre");
+    check(zone_vertices(MW_TOUCH_START_X0, MW_TOUCH_START_Y0,
+                        MW_TOUCH_START_X1, MW_TOUCH_START_Y1) > 0,
+          "the 1P START chip draws at the bottom centre");
+    check(zone_vertices(MW_TOUCH_B1_X0, MW_TOUCH_B1_Y0,
+                        MW_TOUCH_B1_X1, MW_TOUCH_B1_Y1) > 0,
+          "the punch button occupies its B1 hit rect");
+    check(zone_vertices(MW_TOUCH_B2_X0, MW_TOUCH_B2_Y0,
+                        MW_TOUCH_B2_X1, MW_TOUCH_B2_Y1) > 0,
+          "the jump button occupies its B2 hit rect");
+    check(zone_vertices(MW_TOUCH_B3_X0, MW_TOUCH_B3_Y0,
+                        MW_TOUCH_B3_X1, MW_TOUCH_B3_Y1) > 0,
+          "the magic button occupies its B3 hit rect");
+
+    /* ---- D-pad mode: the fixed cross, active limb lit ---- */
+    t.actions = MW_IN_UP;
+    t.stick_finger = -1;
+    g_pending_shot = "t2_dpad";
+    touch_frame(&t, 1, MW_TOUCH_DPAD);
+    check(zone_vertices(MW_TOUCH_DPAD_X0, MW_TOUCH_DPAD_Y0,
+                        MW_TOUCH_DPAD_X1, MW_TOUCH_DPAD_Y1) > 0,
+          "D-pad mode draws the fixed cross inside its rect");
+
+    /* ---- idle stick: the resting ring keeps the thumb area visible ---- */
+    memset(&t, 0, sizeof(t));
+    t.stick_finger = -1;
+    g_pending_shot = "t3_idle";
+    touch_frame(&t, 1, MW_TOUCH_STICK);
+    check(zone_vertices(0.0f, 0.60f, 0.30f, 1.0f) > 0,
+          "the dormant stick ring is drawn before the first touch");
+
+    /* ---- capability flags: the RESOLUTION preset row ---- */
+    g_open = 1;
+    g_launcher = 0;
+    g_pending_shot = "t4_res_on";
+    mw_ui_set_caps(g_ui, 0);
+    mw_ui_begin(g_ui);
+    mw_ui_draw_settings(g_ui, &g_st, &g_open, 0, nullptr, nullptr, &g_changed);
+    render_analysis_frame();
+    /* The chip's left half (arrow + the digits); the aligned INTEGER SCALING
+     * row that moves up when the cap is set must not contribute, so the zone
+     * stops before that row's description and above its baseline. */
+    int res_on = zone_vertices(0.634f, 0.553f, 0.727f, 0.584f);
+
+    g_pending_shot = "t5_res_off";
+    mw_ui_set_caps(g_ui, MW_UI_CAP_NO_RESOLUTION);
+    mw_ui_begin(g_ui);
+    mw_ui_draw_settings(g_ui, &g_st, &g_open, 0, nullptr, nullptr, &g_changed);
+    render_analysis_frame();
+    int res_off = zone_vertices(0.634f, 0.553f, 0.727f, 0.584f);
+    check(res_on > 0, "the RESOLUTION preset chip draws without the cap");
+    check(res_off == 0, "MW_UI_CAP_NO_RESOLUTION hides the RESOLUTION row");
+    mw_ui_set_caps(g_ui, 0);
+    g_open = 0;
+    g_changed = 0;
+
+    /* ---- launcher TOUCH ON/OFF chip (beside MUSIC) ---- */
+    g_launcher = 1;
+    g_open = 0;
+    g_archive = "moonwalker.zip";
+    g_status = "READY";
+    g_start = g_browse = g_open_settings = g_quit = 0;
+    g_st.touch_on = 1;
+    pump();
+    click(l_center(4, 0), l_center(4, 1));
+    check(g_st.touch_on == 0, "the launcher TOUCH chip flips touch_on off");
+    ini = read_file(g_ini);
+    check(ini_value(ini, "touch_on") == "0",
+          "the launcher TOUCH chip persists touch_on=0 (dirty path)");
+    click(l_center(4, 0), l_center(4, 1));
+    check(g_st.touch_on == 1, "a second click turns the launcher TOUCH chip back on");
+    g_pending_shot = "t6_launcher";
+    pump();
+
+    /* ---- CONTROLLERS panel: TOUCH ON/OFF + DPAD/JOYSTICK mode ---- */
+    g_launcher = 0;
+    g_open = 1;
+    g_st.touch_on = 1;
+    g_st.touch_mode = MW_TOUCH_STICK;
+    pump();
+    click(stab_x(1), tab_y());
+    check(mw_ui_tab(g_ui) == MW_UI_TAB_CONTROLLERS,
+          "harness switched to the CONTROLLERS panel");
+    pump();
+    g_pending_shot = "t7_controllers";
+    pump();
+
+    click(ctl_touch_x(), ctl_row_y());
+    check(g_st.touch_on == 0, "CONTROLLERS TOUCH ON/OFF flips touch_on off");
+    ini = read_file(g_ini);
+    check(ini_value(ini, "touch_on") == "0",
+          "the CONTROLLERS toggle persists through the dirty flag");
+    click(ctl_touch_x(), ctl_row_y());
+    check(g_st.touch_on == 1, "the CONTROLLERS toggle flips back on");
+
+    click(ctl_dpad_x(), ctl_mode_y());
+    check(g_st.touch_mode == MW_TOUCH_DPAD, "DPAD mode chip selects the D-pad");
+    ini = read_file(g_ini);
+    check(ini_value(ini, "touch_mode") == "0",
+          "DPAD mode persists through the dirty flag");
+    click(ctl_joy_x(), ctl_mode_y());
+    check(g_st.touch_mode == MW_TOUCH_STICK, "JOYSTICK mode chip selects the stick");
+    g_pending_shot = "t8_controllers_stick";
+    pump();
+}
+
 int main(int argc, char **argv)
 {
     const char *mode = argc > 2 ? argv[2] : "panel";
@@ -991,6 +1209,8 @@ int main(int argc, char **argv)
         run_browse();
     else if (!strcmp(mode, "sliders"))
         run_sliders();
+    else if (!strcmp(mode, "touch"))
+        run_touch();
     else
         run_panel();
 
