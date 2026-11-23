@@ -130,15 +130,7 @@ int mw_host_browse_archive(SDL_Window *window, char *out, int cap)
 int mw_host_spawn_game(const char *base, const char *archive, SDL_Window *self)
 {
     int is_dir = dir_exists(archive);
-#if defined(__ANDROID__)
-    (void)base;
-    (void)archive;
-    (void)self;
-    (void)is_dir;
-    /* The Android launcher hosts the game in-process (mw_game_main); the
-     * build config for that arrives with the Android port. */
-    return -1;
-#elif defined(_WIN32)
+#ifdef _WIN32
     char exe[2048];
     snprintf(exe, sizeof(exe), "%smwalk.exe", base);
     if (!file_exists(exe)) {
