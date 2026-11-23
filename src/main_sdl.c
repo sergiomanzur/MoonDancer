@@ -183,6 +183,74 @@ static void apply_fullscreen(SDL_Window *window, int on)
     SDL_SetWindowFullscreen(window, on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 }
 
+/* Window geometry is user-editable in settings.ini, so it can hold anything
+ * (0, negative, a stale monitor size).  Clamp at application time, before
+ * the value reaches SDL_CreateWindow/SDL_SetWindowSize: 640x448 is the
+ * SDL_SetWindowMinimumSize floor below, and the upper bound keeps garbage
+ * like INT_MAX from turning into a degenerate window.  The clamped value is
+ * written back so the panel and the saved file agree. */
+static void clamp_window_size(int *w, int *h)
+{
+    if (!w || !h) return;
+    int cw = *w;
+    int ch = *h;
+    if (cw <= 0) cw = 1280;   /* 0x0 = "remember nothing", use the preset */
+    if (ch <= 0) ch = 720;
+    if (cw < 640) cw = 640;
+    if (ch < 448) ch = 448;
+    if (cw > 7680) cw = 7680;
+    if (ch > 4320) ch = 4320;
+    *w = cw;
+    *h = ch;
+}
+
+/* One RGB channel scaled by an 8.8 fixed-point multiplier. */
+static uint32_t shade_pixel(uint32_t p, unsigned mul)
+{
+    uint32_t r = ((((p >> 16) & 0xFFu) * mul) >> 8) & 0xFFu;
+    uint32_t g = ((((p >> 8) & 0xFFu) * mul) >> 8) & 0xFFu;
+    uint32_t b = (((p & 0xFFu) * mul) >> 8) & 0xFFu;
+    return (p & 0xFF000000u) | (r << 16) | (g << 8) | b;
+}
+
+/* Source-space CRT presets.  Runs on the full 560x224 frame between
+ * s18_render_frame() and SDL_UpdateTexture(), so the pattern is one scanline
+ * per emulated line at any window scale (the retired window-space overlay
+ * beat against the 224 source lines at non-integer scales).
+ *
+ *   0 OFF        byte-exact no-op: returns before touching the buffer
+ *   1 SCANLINES  odd source lines scaled toward black by intensity*0.45/100
+ *   2 CRT        SCANLINES plus a vertical 3-column aperture grille at half
+ *                that factor (bloom approximation intentionally omitted:
+ *                not wanted in the 224-line source frame)
+ *
+ * `intensity` is 0..100; 0 is also a no-op because nothing is attenuated. */
+static void apply_shader(uint32_t *frame, int w, int h, int preset, int intensity)
+{
+    if (!frame || w <= 0 || h <= 0 || preset <= 0 || intensity <= 0) return;
+    if (intensity > 100) intensity = 100;
+    if (preset > 2) preset = 2;
+
+    const float f = (float)intensity / 100.0f;
+    const unsigned line_mul = (unsigned)((1.0f - f * 0.45f) * 256.0f + 0.5f);
+    const unsigned grille_mul = (unsigned)((1.0f - f * 0.45f * 0.5f) * 256.0f + 0.5f);
+
+    for (int y = 1; y < h; y += 2) {
+        uint32_t *row = frame + (size_t)y * (size_t)w;
+        for (int x = 0; x < w; x++)
+            row[x] = shade_pixel(row[x], line_mul);
+    }
+    if (preset != 2) return;
+
+    /* Aperture grille: one attenuated column per 3-pixel period, on every
+     * line (so it reads as vertical lines, not a checkerboard). */
+    for (int y = 0; y < h; y++) {
+        uint32_t *row = frame + (size_t)y * (size_t)w;
+        for (int x = 0; x < w; x += 3)
+            row[x] = shade_pixel(row[x], grille_mul);
+    }
+}
+
 static int extract_archive(const char *zip, char *romdir, int cap)
 {
     char *pref = SDL_GetPrefPath("MoonwalkerRecomp", "Moonwalker");
@@ -298,8 +366,10 @@ int main(int argc, char **argv)
     }
 
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+    clamp_window_size(&g_settings.window_w, &g_settings.window_h);
     SDL_Window *window = SDL_CreateWindow("Michael Jackson's Moonwalker",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        g_settings.window_w, g_settings.window_h,
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!window) {
         fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
@@ -354,6 +424,8 @@ int main(int argc, char **argv)
     int settings_dirty = 0;
     int applied_fullscreen = g_settings.fullscreen;
     int applied_audio = audio_on;
+    int applied_window_w = g_settings.window_w;
+    int applied_window_h = g_settings.window_h;
     Uint32 last_save = 0;
     double fps = 60.0;
     Uint64 fps_last = SDL_GetPerformanceCounter();
@@ -429,6 +501,10 @@ int main(int argc, char **argv)
                                    S18_SCREEN_H, g_settings.integer_scale);
         {
             uint32_t *frame = s18_render_frame(&machine);
+            /* Shader presets run in source space, so every emulated line
+             * gets exactly one scanline regardless of the window size. */
+            apply_shader(frame, machine.view_w, S18_SCREEN_H,
+                         g_settings.shader_preset, g_settings.scanline_intensity);
             SDL_Rect upd = { 0, 0, machine.view_w, S18_SCREEN_H };
             SDL_UpdateTexture(texture, &upd, frame, machine.view_w * (int)sizeof(uint32_t));
         }
@@ -446,8 +522,6 @@ int main(int argc, char **argv)
         mw_ui_begin(ui);
         if (g_settings.show_fps)
             mw_ui_draw_fps(ui, (float)fps);
-        if (g_settings.scanlines)
-            mw_ui_draw_crt(ui, rect.x, rect.y, rect.w, rect.h);
         int was_open = settings_open;
         if (settings_open) {
             int reset_request = 0, quit_request = 0, changed = 0;
@@ -473,6 +547,17 @@ int main(int argc, char **argv)
         if (g_settings.fullscreen != applied_fullscreen) {
             apply_fullscreen(window, g_settings.fullscreen);
             applied_fullscreen = g_settings.fullscreen;
+        }
+        /* RESOLUTION presets apply immediately, like fullscreen above.
+         * While fullscreen the desktop size rules, so the window size is
+         * only pushed once the user is back in a window; the pending value
+         * is picked up on the next frame after leaving fullscreen. */
+        clamp_window_size(&g_settings.window_w, &g_settings.window_h);
+        if (!g_settings.fullscreen &&
+            (g_settings.window_w != applied_window_w || g_settings.window_h != applied_window_h)) {
+            SDL_SetWindowSize(window, g_settings.window_w, g_settings.window_h);
+            applied_window_w = g_settings.window_w;
+            applied_window_h = g_settings.window_h;
         }
         /* The F1 panel's SOUND toggle applies live, like fullscreen above.
          * A forced-on --audio / MW_AUDIO keeps the device open. */

@@ -288,17 +288,24 @@ bool display_mode_row(mw_ui *ui, mw_settings *settings, ImVec2 pos, float width,
     return changed_now;
 }
 
-bool volume_row(mw_ui *ui, mw_settings *settings, ImVec2 pos, float width, float s, int *changed)
+/* Shared 0..100% slider row (volume, scanline intensity). */
+bool percent_row(mw_ui *ui, const char *id, const char *label, int *value,
+                 ImVec2 pos, float width, float s, int *changed)
 {
+    if (!value) return false;
     ImGui::SetCursorScreenPos(pos);
-    ImGui::InvisibleButton("##volume", ImVec2(width, 52.0f * s));
+    ImGui::InvisibleButton(id, ImVec2(width, 52.0f * s));
     bool hovered = ImGui::IsItemHovered();
     bool active = ImGui::IsItemActive();
     ImDrawList *dl = ImGui::GetWindowDrawList();
 
-    text(dl, ui->font_body, 21.0f * s, pos, C_TEXT, "MASTER VOLUME");
+    int shown = *value;
+    if (shown < 0) shown = 0;
+    if (shown > 100) shown = 100;
+
+    text(dl, ui->font_body, 21.0f * s, pos, C_TEXT, label);
     char pct[32];
-    snprintf(pct, sizeof(pct), "%d%%", settings->volume);
+    snprintf(pct, sizeof(pct), "%d%%", shown);
     ImVec2 pts = text_size(ui->font_button, 19.0f * s, pct);
     text(dl, ui->font_button, 19.0f * s, ImVec2(pos.x + width - pts.x, pos.y), A(C_CYAN, 230), pct);
 
@@ -306,7 +313,7 @@ bool volume_row(mw_ui *ui, mw_settings *settings, ImVec2 pos, float width, float
     float tw = width;
     float th = 6.0f * s;
     dl->AddRectFilled(track, ImVec2(track.x + tw, track.y + th), IM_COL32(22, 28, 44, 240), th * 0.5f);
-    float fill = tw * (settings->volume / 100.0f);
+    float fill = tw * (shown / 100.0f);
     if (fill > 1.0f)
         dl->AddRectFilledMultiColor(track, ImVec2(track.x + fill, track.y + th),
                                     C_MAGENTA, C_CYAN, C_CYAN, C_MAGENTA);
@@ -325,14 +332,89 @@ bool volume_row(mw_ui *ui, mw_settings *settings, ImVec2 pos, float width, float
         float rel = (mx - track.x) / tw;
         rel = std::max(0.0f, std::min(1.0f, rel));
         int nv = (int)(rel * 100.0f + 0.5f);
-        if (nv != settings->volume) {
-            settings->volume = nv;
+        if (nv != *value) {
+            *value = nv;
             changed_now = true;
             if (changed) *changed = 1;
         }
     }
     if (hovered || active) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     return changed_now;
+}
+
+/* One-line cycle control: label on the left, "< value >" chip on the right.
+ * Returns the index to switch to when clicked, or -1.  An index outside
+ * 0..count-1 shows `fallback` (e.g. a hand-edited custom window size) and
+ * the first click snaps to entry 0. */
+int cycle_row(mw_ui *ui, const char *id, const char *label,
+              const char *const *names, int count, int index,
+              const char *fallback, ImVec2 pos, float width, float s)
+{
+    ImGui::SetCursorScreenPos(pos);
+    ImGui::InvisibleButton(id, ImVec2(width, 40.0f * s));
+    bool hovered = ImGui::IsItemHovered();
+    bool clicked = ImGui::IsItemClicked();
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+
+    const char *shown = (index >= 0 && index < count) ? names[index] : fallback;
+    if (!shown) shown = "-";
+
+    text(dl, ui->font_body, 21.0f * s, pos,
+         hovered ? C_TEXT : IM_COL32(224, 238, 248, 255), label);
+
+    float cw = 186.0f * s, chh = 32.0f * s;
+    ImVec2 c(pos.x + width - cw, pos.y + 1.0f * s);
+    dl->AddRectFilled(c, ImVec2(c.x + cw, c.y + chh), IM_COL32(8, 12, 22, 235), 8.0f * s);
+    dl->AddRect(c, ImVec2(c.x + cw, c.y + chh), A(C_CYAN, hovered ? 200 : 80), 8.0f * s, 0, 1.2f);
+    float cy = c.y + chh * 0.5f;
+    ImU32 arrow = A(C_CYAN, hovered ? 240 : 150);
+    dl->AddTriangleFilled(ImVec2(c.x + 13 * s, cy), ImVec2(c.x + 21 * s, cy - 5 * s),
+                          ImVec2(c.x + 21 * s, cy + 5 * s), arrow);
+    dl->AddTriangleFilled(ImVec2(c.x + cw - 13 * s, cy), ImVec2(c.x + cw - 21 * s, cy - 5 * s),
+                          ImVec2(c.x + cw - 21 * s, cy + 5 * s), arrow);
+    float fsize = 17.0f * s;
+    ImVec2 ts = text_size(ui->font_button, fsize, shown);
+    if (ts.x > cw - 56.0f * s) {
+        fsize = 14.0f * s;
+        ts = text_size(ui->font_button, fsize, shown);
+    }
+    text(dl, ui->font_button, fsize,
+         ImVec2(c.x + (cw - ts.x) * 0.5f, c.y + (chh - ts.y) * 0.5f - 1.0f * s),
+         A(C_CYAN, 245), shown);
+    if (hovered) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    if (!clicked) return -1;
+    return (index >= 0 && index < count) ? (index + 1) % count : 0;
+}
+
+const char *const k_shader_names[3] = { "OFF", "SCANLINES", "CRT" };
+const int k_res_w[4] = { 1280, 1600, 1920, 2560 };
+const int k_res_h[4] = { 720, 900, 1080, 1440 };
+const char *const k_res_names[4] = { "1280 x 720", "1600 x 900", "1920 x 1080", "2560 x 1440" };
+
+/* Window-size presets write window_w/h; main_sdl.c applies them live. */
+bool resolution_row(mw_ui *ui, mw_settings *settings, ImVec2 pos, float width, float s)
+{
+    int idx = -1;
+    for (int i = 0; i < 4; i++) {
+        if (settings->window_w == k_res_w[i] && settings->window_h == k_res_h[i]) {
+            idx = i;
+            break;
+        }
+    }
+    char custom[32];
+    snprintf(custom, sizeof(custom), "%d x %d", settings->window_w, settings->window_h);
+    int next = cycle_row(ui, "##resolution", "RESOLUTION", k_res_names, 4, idx,
+                         idx < 0 ? custom : NULL, pos, width, s);
+    if (next < 0) return false;
+    settings->window_w = k_res_w[next];
+    settings->window_h = k_res_h[next];
+    return true;
+}
+
+bool volume_row(mw_ui *ui, mw_settings *settings, ImVec2 pos, float width, float s, int *changed)
+{
+    return percent_row(ui, "##volume", "MASTER VOLUME",
+                       settings ? &settings->volume : NULL, pos, width, s, changed);
 }
 
 void draw_corner(ImDrawList *dl, ImVec2 p, float len, ImU32 col, int dir_x, int dir_y, float s)
@@ -694,7 +776,7 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
     text_spaced(bg, ui->font_small, label_size, ImVec2(px, y_video),
                 A(C_CYAN, 220), "VIDEO", 2.0f * s);
 
-    float y_ui = py + 522 * s;
+    float y_ui = py + 526 * s;
     text_spaced(bg, ui->font_small, label_size, ImVec2(px, y_ui),
                 A(C_CYAN, 220), "INTERFACE", 2.0f * s);
 
@@ -724,17 +806,39 @@ extern "C" void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
              ? "Original 320x224 framing. No extra world is revealed."
              : "Expanded field of view. The scene is cropped, never stretched.");
 
+    /* VIDEO is laid out as two compact columns so the five rows (fullscreen,
+     * shader, intensity, resolution, integer scaling) fit between the header
+     * and the INTERFACE section without growing the 700-px panel, which must
+     * stay usable in the 640x448 minimum window. */
+    const float col_w = (pw - 76 * s - 24 * s) * 0.5f;
+    const float col2 = px + col_w + 24 * s;
+    float vrow = y_video + 22 * s;
+
     bool fs = settings->fullscreen != 0;
     if (toggle_row(ui, "##fullscreen", "FULLSCREEN", "Borderless fullscreen display",
-                   &fs, ImVec2(px, y_video + 22 * s), pw - 76 * s, s, changed))
+                   &fs, ImVec2(px, vrow), col_w, s, changed))
         settings->fullscreen = fs ? 1 : 0;
-    bool scan = settings->scanlines != 0;
-    if (toggle_row(ui, "##scanlines", "CRT SCANLINES", "Subtle arcade line overlay",
-                   &scan, ImVec2(px, y_video + 72 * s), pw - 76 * s, s, changed))
-        settings->scanlines = scan ? 1 : 0;
+
+    int shader = cycle_row(ui, "##shader", "SHADER", k_shader_names, 3,
+                           settings->shader_preset, "OFF", ImVec2(px, vrow + 50 * s), col_w, s);
+    if (shader >= 0 && shader != settings->shader_preset) {
+        settings->shader_preset = shader;
+        if (changed) *changed = 1;
+    }
+    if (settings->shader_preset != 0) {
+        percent_row(ui, "##intensity", "SCANLINE INTENSITY", &settings->scanline_intensity,
+                    ImVec2(px, vrow + 96 * s), col_w, s, changed);
+    } else {
+        text(bg, ui->font_small, 14 * s, ImVec2(px, vrow + 106 * s), A(C_MUTED, 210),
+             "Intensity applies to SCANLINES and CRT.");
+    }
+
+    if (resolution_row(ui, settings, ImVec2(col2, vrow), col_w, s) && changed)
+        *changed = 1;
+
     bool integer = settings->integer_scale != 0;
     if (toggle_row(ui, "##integer", "INTEGER SCALING", "Pixel-perfect whole-number scaling",
-                   &integer, ImVec2(px, y_video + 122 * s), pw - 76 * s, s, changed))
+                   &integer, ImVec2(col2, vrow + 50 * s), col_w, s, changed))
         settings->integer_scale = integer ? 1 : 0;
 
     bool fps = settings->show_fps != 0;
@@ -786,18 +890,4 @@ extern "C" void mw_ui_draw_fps(mw_ui *ui, float fps)
                       IM_COL32(2, 4, 10, 150), 8 * s);
     dl->AddCircleFilled(ImVec2(x - 18 * s, y + ts.y * 0.5f), 3.5f * s, A(C_CYAN, 220));
     text(dl, ui->font_small, sz, ImVec2(x, y), A(C_MUTED, 230), buf);
-}
-
-extern "C" void mw_ui_draw_crt(mw_ui *ui, int x, int y, int w, int h)
-{
-    if (!ui || w <= 0 || h <= 0) return;
-    float s = ui_scale(ui);
-    ImDrawList *dl = ImGui::GetBackgroundDrawList();
-    float step = std::max(2.0f, 2.0f * s);
-    for (float yy = (float)y; yy < (float)(y + h); yy += step)
-        dl->AddLine(ImVec2((float)x, yy), ImVec2((float)(x + w), yy),
-                    IM_COL32(0, 0, 0, 30), 1.0f);
-    dl->AddRectFilledMultiColor(ImVec2((float)x, (float)y), ImVec2((float)(x + w), (float)(y + h * 0.12f)),
-                                IM_COL32(0, 0, 0, 40), IM_COL32(0, 0, 0, 40),
-                                IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
 }

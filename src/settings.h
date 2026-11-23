@@ -14,7 +14,7 @@ extern "C" {
 typedef struct mw_settings {
     int volume;         /* 0..100 */
     int fullscreen;     /* 0/1 */
-    int scanlines;      /* 0/1 */
+    int scanlines;      /* legacy on/off flag; retired by shader_preset */
     int integer_scale;  /* 0/1 */
     int show_fps;       /* 0/1 */
     int display_mode;   /* MW_DISPLAY_* */

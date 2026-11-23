@@ -30,7 +30,6 @@ void mw_ui_draw_settings(mw_ui *ui, mw_settings *settings, int *open,
                          int *changed);
 
 void mw_ui_draw_fps(mw_ui *ui, float fps);
-void mw_ui_draw_crt(mw_ui *ui, int x, int y, int w, int h);
 
 #ifdef __cplusplus
 }
