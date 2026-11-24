@@ -80,10 +80,12 @@ int mw_host_base_dir(char *buf, int cap)
 #endif
 }
 
-/* Writable state (NVRAM, screenshots).  Same folder as the assets today, so a
- * packaged install behaves exactly as it did when these paths were CWD
- * relative and the launcher started the game in the exe directory.  The Linux
- * `portable` marker check and the Android preference directory slot in here. */
+/* Writable state (NVRAM, screenshots).  Desktop keeps the same folder as the
+ * assets, so a packaged install behaves exactly as it did when these paths were
+ * CWD relative and the launcher started the game in the exe directory: the
+ * forward below is SDL_GetBasePath() and nothing else, on Windows and Linux
+ * alike.  Android is the one platform that slots a different directory in
+ * there, through pref_dir(). */
 int mw_host_data_dir(char *buf, int cap)
 {
     return mw_host_base_dir(buf, cap);
