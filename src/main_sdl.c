@@ -536,8 +536,15 @@ int mw_game_main(int argc, char **argv)
         fprintf(stderr, "Could not initialize the settings overlay.\n");
         return 1;
     }
+#ifdef __ANDROID__
+    /* The game window is the Android activity surface: window-size presets
+     * are meaningless here (the plan's capability-flag contract).  The
+     * launcher sets the same cap on its own mw_ui instance. */
+    mw_ui_set_caps(ui, MW_UI_CAP_NO_RESOLUTION);
+#else
     /* Desktop host: every panel row applies, no capability flags are set. */
     mw_ui_set_caps(ui, 0);
+#endif
 
     g_sdl_audio = audio;
     audio_apply(audio_on);
