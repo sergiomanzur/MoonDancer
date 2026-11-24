@@ -8,10 +8,11 @@ extern "C" {
 #endif
 
 /* Writable dir for NVRAM + screenshots, trailing separator, 1 on success.
- * Windows/Linux: SDL_GetBasePath() - packaged behavior identical to today.
- * Linux override: a `portable` marker dir beside the binary switches back on.
+ * Desktop (Windows and Linux): SDL_GetBasePath(), the portable-folder rule,
+ * so a packaged install behaves exactly like the shipped Windows build.
  * Android: SDL_GetPrefPath("MoonwalkerRecomp","Moonwalker"), the app's files
- * directory (there is no writable install tree). */
+ * directory (there is no writable install tree). The desktop branch is
+ * unconditional: no marker or environment override switches it. */
 int mw_host_data_dir(char *buf, int cap);
 /* Read-only asset dir (fonts/, launcher background). Same platform map;
  * on Android it is the same files directory, populated by
