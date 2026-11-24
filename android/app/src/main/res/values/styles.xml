@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Base application theme. -->
-    <style name="AppTheme" parent="android:Theme.NoTitleBar.Fullscreen">
-        <!-- Customize your theme here. -->
+    <!-- Base application theme.  The window keeps no title bar; the system
+         bars are hidden by SDL's immersive fullscreen path (the game's
+         FULLSCREEN setting, on by default on Android), not by a theme flag:
+         Theme.NoTitleBar.Fullscreen is a legacy startup flag that SDL then
+         overrides anyway, so it only made the manifest look authoritative. -->
+    <style name="AppTheme" parent="android:Theme.NoTitleBar">
     </style>
 </resources>

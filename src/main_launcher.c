@@ -139,6 +139,15 @@ static int create_surface(const char *base, const char *background,
         fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
         return 0;
     }
+#ifdef __ANDROID__
+    /* The launcher has no FULLSCREEN row and is always the activity's game
+     * surface: enter SDL's fullscreen path immediately, which is how SDL
+     * applies the sticky immersive mode that hides the system bars.  The game
+     * window follows the saved FULLSCREEN setting instead (default on for a
+     * fresh Android install); this call also runs when the launcher surface is
+     * rebuilt after a game, so returning from the game is immersive too. */
+    SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+#endif
     renderer = SDL_CreateRenderer(window, -1,
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer)

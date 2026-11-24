@@ -29,7 +29,15 @@ void mw_settings_defaults(mw_settings *s)
     int p, a;
     if (!s) return;
     s->volume = 80;
+#ifdef __ANDROID__
+    /* A handheld game app that launches with the status/navigation bars on
+     * screen looks broken.  SDL maps this flag to the activity's sticky
+     * immersive mode, and the FULLSCREEN toggle still turns it off for a
+     * session and persists the choice.  Desktop keeps its windowed default. */
+    s->fullscreen = 1;
+#else
     s->fullscreen = 0;
+#endif
     s->scanlines = 0;
     s->integer_scale = 1;
     s->show_fps = 0;

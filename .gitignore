@@ -22,6 +22,10 @@ android/app/.cxx/
 android/app/build/
 android/build/
 android/local.properties
+# Private bundle input (package_android_private.ps1 copies it in only for the
+# duration of the build) and every packaged APK: game data and ROM-derived code
+android/app/src/main/assets/mwalk.zip
+*.apk
 # SDL2 source fetched by tools/fetch_sdl2_source.py for the Android build
 third_party/SDL2/
 

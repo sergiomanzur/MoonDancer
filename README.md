@@ -1,8 +1,8 @@
 # Moon Dancer
 
-**v0.9.0b** — a from-scratch, native Windows/Linux/macOS runtime for **Michael
-Jackson's Moonwalker** (Sega System 18, 1990), built from the user's own
-`mwalk.zip` ROM set. It is not a MAME front end: the board's 68000, memory
+**v0.9.0b** — a from-scratch, native Windows/Linux/macOS/Android runtime for
+**Michael Jackson's Moonwalker** (Sega System 18, 1990), built from the user's
+own `mwalk.zip` ROM set. It is not a MAME front end: the board's 68000, memory
 mapper, video hardware, I/O chip and sound board are implemented in portable
 C/C++ and the game's FD1094-encrypted program is executed by the native
 runtime.
@@ -170,11 +170,16 @@ Working:
   latched, credits increment at `$E000`, the start press consumes a credit,
   and the post-start mode byte `$E036` matches MAME (`0x18`). Tile RAM and
   text RAM are byte-identical at frame 1200 with the same inputs.
-- NVRAM persistence: work RAM is the board's 16 KiB NVRAM (settings, high
-  scores, bookkeeping). The SDL build loads/saves `nvram/mwalk/nvram`;
-  `--nvram FILE` / `--no-nvram` override it. `--no-nvram` disables every
+- NVRAM persistence: work RAM is the board's 16 KiB NVRAM (settings,
+  bookkeeping). The SDL build loads/saves `nvram/mwalk/nvram` under the host
+  data directory — the executable's folder in a portable desktop build, the
+  app's files directory on Android — not relative to the shell's working
+  directory. `--nvram FILE` overrides the path and `--no-nvram` disables every
   write, including the Android periodic flush (a running game rewrites the
-  image every 30 s so a killed process loses at most that window).
+  image every 30 s so a killed process loses at most that window). Credits are
+  battery-backed and survive a relaunch, as on the board. The high-score table
+  is volatile — the game rebuilds its factory table at every cold boot; see the
+  Android section for the board-oracle evidence.
 - Fixed a 68000 recompiler bug where register bit operations (`BSET`,
   `BCLR`, `BCHG`, `BTST Dn,Dn`) were emitted as byte operations instead of
   32-bit operations. This was corrupting the palette shadow buffer during
@@ -285,8 +290,141 @@ macOS: the same CMake flow, using the SDL2 framework/package from
 Homebrew or the official SDL2 DMG.
 
 Android: the machine, FD1094, video and audio modules are portable C/C++;
-the SDL2 front end maps directly to `SDL_main`/`SDLActivity`. A Gradle
-project will be added in the porting step.
+the SDL2 front end maps directly to `SDL_main`/`SDLActivity`. The Gradle
+project lives in `android/`; see [Android](#android) for the build, install
+and controls.
+
+## Android
+
+The Android port is one app, `com.moondancer.recomp`: the neon launcher and the
+game run in the same process, on `SDLActivity`'s SDL thread. It targets
+arm64-v8a, landscape, Android 8.0 (API 26) or newer; the reference device is
+the Retroid Pocket 6 (Android 13).
+
+### Requirements
+
+- Your own `mwalk.zip` — the app ships no game data.
+- A 64-bit ARM device with Android 8.0+.
+- To build: Android SDK 34 and NDK 26.2 (the versions pinned in
+  `android/app/build.gradle`), the repository's Gradle wrapper, and SDL2
+  sources fetched once with `python tools/fetch_sdl2_source.py`.
+
+### Build and install (public, ROM-free)
+
+```powershell
+cd android
+.\gradlew.bat :app:assembleDebug
+```
+
+The artifact is `android\app\build\outputs\apk\debug\app-debug.apk`.
+Sideload it with `adb install -r app-debug.apk`, or copy the APK to the device
+and open it. Launch **Moon Dancer**.
+
+The variant stays `debug` deliberately: it installs without a keystore, while
+the native code is pinned to `-O3` (see [Performance](#performance)). A
+release-signed build would need key management this project does not provide.
+The public APK contains no ROM data — only the app code, fonts and
+background — but like `mwalk.exe` it does contain the translated game code
+built from your ROM, so keep it to yourself.
+
+### Importing the ROM
+
+The launcher opens with **NO ARCHIVE SELECTED**; tap **BROWSE**. Android's
+system document picker opens and you pick your `mwalk.zip`. The archive is
+copied to the app's private `files/mwalk.zip`, announced to the launcher, and
+the card changes to `READY // ARCHIVE SELECTED`. A failed or cancelled import
+never destroys the archive already there. **START GAME** runs the game
+in-process (the launcher window is destroyed first because the activity has
+one surface); quitting the game from the in-game overlay recreates the
+launcher. On later launches the saved archive is found automatically.
+
+### Controls
+
+Touch controls drive player 1; gamepads work exactly as on desktop (up to
+three, with per-player rebinding and GUID-based slots).
+
+- **Left half** — **JOYSTICK** by default: a floating stick that anchors where
+  your thumb lands, with a visible dead-zone. Switch to **DPAD** (fixed cross,
+  four-way plus corner diagonals) in SETTINGS → CONTROLLERS. The choice is
+  saved in `settings.ini`.
+- **Right half** — **PUNCH**, **JUMP** and **MAGIC** round icons (B1/B2/B3).
+- **Bottom centre** — **COIN** and **1P START** chips; each tap is one press
+  (no auto-repeat while held).
+- **Top right** — **MENU** (pause bars) is always available, even with the
+  touch layer hidden, and opens/closes the same overlay as F1.
+- **BACK** is trapped by SDL instead of finishing the activity: in game it
+  toggles the overlay (never quits); in the launcher it closes the archive
+  browser or settings panel, and only then exits the app.
+- The overlay's **QUIT GAME** returns to the launcher; the launcher's **QUIT**
+  exits the app. **RESET GAME**, cheats, SOUND, DISPLAY (4:3/16:9/16:10/21:9),
+  shader and volume work as on desktop; the window-resolution presets are
+  hidden because the activity surface owns the size.
+- TOUCH ON/OFF is on the launcher card and the overlay; hiding the layer keeps
+  MENU visible so there is always a way back.
+
+The app launches immersive: the system bars are hidden from the first frame
+and FULLSCREEN is on by default for a fresh Android install (the toggle still
+turns it off and saves that choice).
+
+### Performance
+
+The emulated board runs at its native **57.23 Hz**, and the whole machine is
+paced at that rate rather than a rounded 60; audio follows the same clock.
+Native code is compiled `-O3` (SDL2 included) even in the debug variant: the
+earlier `-O0` debug native build could not hold the frame budget and produced
+low frame rates and audio crackle. The SHOW FPS readout therefore hovers
+around 57, which is the correct full speed for this title.
+
+### Private bundle (never publish)
+
+To get a single APK that already carries your ROM, run:
+
+```powershell
+.\package_android_private.ps1
+```
+
+The script copies `mwalk.zip` into `android/app/src/main/assets/` only for the
+duration of the build (and removes it again even if the build fails), builds
+the same optimized APK, verifies `assets/mwalk.zip` is inside, names it
+`dist/Moon-Dancer-private-<sha12>-android.apk` (the hash is of your archive),
+and prints a never-publish warning. On first launch the app extracts the
+bundled archive to `files/mwalk.zip` — never clobbering an archive you imported
+yourself — so the launcher is ready without the picker.
+
+**That APK contains game data. Never publish, upload or share it.** Only the
+plain public build above is redistributable, and even that carries
+ROM-derived translated code.
+
+### NVRAM, credits and high scores
+
+Work RAM is the board's battery-backed 16 KiB NVRAM. Android saves it to
+`files/nvram/mwalk/nvram` and flushes it every 30 s while a player is actually
+in play (plus the save on a clean exit); `--no-nvram` disables both, exactly as
+on desktop. A force-stop therefore loses at most the last 30 s. The image is
+restored *after* the board reset clears work RAM, so its bytes are present when
+the game executes its first instruction — exactly the order MAME uses.
+
+**Credits persist.** A saved image holding 9 credits boots with `CREDITS 9` on
+the attract screen, and the image written at exit still holds the same counter.
+This matches the battery-backed board and MAME's own `.nv` files.
+
+**High scores are volatile by design.** The game rebuilds its score table
+(work RAM `0x3C00`, ten 7-byte entries, factory values `50000` down to `5000`)
+at every cold boot, and the board has no serial EEPROM that could keep them
+elsewhere. The evidence:
+
+- MAME's `mwalk` driver (`sega/segas18.cpp`) defines only the generic 16 KiB
+  `nvram` device; `mame mwalk -listxml` reports no `eeprom`/`93c46` device.
+- A real game-over score (9020, written into the table by the game itself) was
+  saved into an NVRAM image. The next boot of this port — and of MAME 0.289
+  with the same image in `-nvram_directory` — replaced the table with the
+  factory default while keeping the credit counter untouched.
+- On device, a qualifying entry seeded into `files/nvram/mwalk/nvram` did not
+  survive the next boot either; the attract showed `TOP 50000`.
+
+So the missing piece is not an emulated EEPROM: Moonwalker simply does not
+persist score tables across power cycles. Everything else in the image is
+preserved byte-for-byte.
 
 ## ROM setup
 
@@ -418,9 +556,10 @@ input runs use `--random SEED`; seeds are reproducible across machines.
 
 `mwalk.exe --demo` is the quickest way to see the game running. It waits for
 the attract screen, inserts a coin at frame 900, starts 1P at frame 1000 and
-then holds direction/attack inputs. The SDL build keeps settings/high scores
-in `nvram/mwalk/nvram`; use `--no-nvram` for a clean boot or `--nvram FILE`
-for a specific image. The same schedule is available headless:
+then holds direction/attack inputs. The SDL build keeps its NVRAM image in
+`nvram/mwalk/nvram` under the executable's folder (or the app files directory
+on Android); use `--no-nvram` for a clean boot or `--nvram FILE` for a
+specific image. The same schedule is available headless:
 
 ```powershell
 .\build\mwalk_headless.exe --rom-dir roms --frames 3000 --demo --dsw 0xED
@@ -523,5 +662,5 @@ The original code in this repository is provided under the MIT license (see
 4. Grow trace coverage (death/continue, all stages) so the Musashi fallback
    is needed less often, and tighten cycle accounting for exact attract-mode
    parity.
-5. Add save states and the remaining packaging targets (Linux AppImage,
-   macOS .app, Android APK).
+5. Add save states and the remaining packaging targets (Linux/SteamOS
+   AppImage, macOS .app).
