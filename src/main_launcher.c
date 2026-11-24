@@ -109,6 +109,11 @@ static int create_surface(const char *base, const char *background,
                           SDL_Window **out_window, SDL_Renderer **out_renderer,
                           mw_ui **out_ui)
 {
+    /* Every launcher surface owns its scale expectation.  The game sets
+     * "nearest" for its pixel art and does not restore it, so after an
+     * in-process run the rebuilt launcher surface would inherit the game's
+     * value unless it is set here. */
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
     SDL_Window *window = SDL_CreateWindow("Moonwalker // Launcher",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
         SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
@@ -174,7 +179,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+    /* The renderer scale hint lives in create_surface(): the game leaves
+     * "nearest" behind, so each launcher surface sets its own. */
     /* Android: one-time copy of the APK's fonts/background into the files
      * dir; no-op on desktop, where those files sit beside the executable. */
     mw_host_extract_assets();

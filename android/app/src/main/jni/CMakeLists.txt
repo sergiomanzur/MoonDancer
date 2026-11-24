@@ -25,7 +25,10 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 get_filename_component(MW_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." ABSOLUTE)
-set(SDL2_SOURCE "${MW_ROOT}/third_party/SDL2")
+# CACHE so the FATAL_ERROR hint below actually works: a plain set() would
+# shadow any -DSDL2_SOURCE=<path> passed on the configure command line.
+set(SDL2_SOURCE "${MW_ROOT}/third_party/SDL2" CACHE PATH
+    "SDL2 source tree (override with -DSDL2_SOURCE=<path>)")
 
 if(NOT EXISTS "${SDL2_SOURCE}/CMakeLists.txt")
     message(FATAL_ERROR
