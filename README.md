@@ -409,9 +409,9 @@ the attract screen, and the image written at exit still holds the same counter.
 This matches the battery-backed board and MAME's own `.nv` files.
 
 **High scores are volatile by design.** The game rebuilds its score table
-(work RAM `0x3C00`, ten 7-byte entries, factory values `50000` down to `5000`)
-at every cold boot, and the board has no serial EEPROM that could keep them
-elsewhere. The evidence:
+(work RAM `0x3C00`, ten 8-byte entries: 4-byte BCD score plus 4-byte initials,
+factory values `50000` down to `5000`) at every cold boot, and the board has no
+serial EEPROM that could keep them elsewhere. The evidence:
 
 - MAME's `mwalk` driver (`sega/segas18.cpp`) defines only the generic 16 KiB
   `nvram` device; `mame mwalk -listxml` reports no `eeprom`/`93c46` device.

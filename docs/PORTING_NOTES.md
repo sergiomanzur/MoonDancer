@@ -219,11 +219,11 @@ hash files.
   high-score table is volatile by design. MAME's `mwalk` driver defines no
   EEPROM (only the generic 16 KiB `nvram` device: `mame mwalk -listxml` shows
   no `eeprom`/`93c46`), and the game rewrites the table (work RAM `0x3C00`,
-  ten 7-byte BCD entries, defaults `50000`/`45000`/.../`5000`) at every cold
-  boot while leaving the credit byte (`0x2000`) alone. A game-written entry
-  (9020) seeded into an NVRAM image is replaced by the defaults on the next
-  boot in both this port and MAME 0.289, so no emulated EEPROM is missing; see
-  the README's Android section.
+  ten 8-byte entries: 4-byte BCD score + 4-byte initials, defaults
+  `50000`/`45000`/.../`5000`) at every cold boot while leaving the credit byte
+  (`0x2000`) alone. A game-written entry (9020) seeded into an NVRAM image is
+  replaced by the defaults on the next boot in both this port and MAME 0.289,
+  so no emulated EEPROM is missing; see the README's Android section.
 - Task 10 found and fixed a load-order bug: `mw_game_main` restored the image
   before `mw_m68k_reset()`, whose `s18_reset()` clears work RAM, so the SDL and
   Android front ends silently started clean on every launch. The load now
