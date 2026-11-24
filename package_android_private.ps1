@@ -39,15 +39,26 @@ if (-not (Test-Path -LiteralPath $rom)) {
 
 # Gradle needs to know where the SDK is.  Honor the environment when set,
 # otherwise fall back to the standard per-user install; local.properties is
-# gitignored, so writing it here never pollutes the repository.
+# gitignored, so writing it here never pollutes the repository.  Only resolved
+# when the file is missing: an existing local.properties is authoritative.
 $localProps = Join-Path $project "local.properties"
-$sdk = $env:ANDROID_HOME
-if (-not $sdk) { $sdk = $env:ANDROID_SDK_ROOT }
-if (-not $sdk) { $sdk = Join-Path $env:LOCALAPPDATA "Android\Sdk" }
-if ((Test-Path -LiteralPath $sdk) -and -not (Test-Path -LiteralPath $localProps)) {
-    $escaped = $sdk -replace '\\', '\\'
-    Set-Content -LiteralPath $localProps -Value "sdk.dir=$escaped" -Encoding ASCII
-    Write-Host "Wrote $localProps"
+if (-not (Test-Path -LiteralPath $localProps)) {
+    $sdk = $env:ANDROID_HOME
+    if (-not $sdk) { $sdk = $env:ANDROID_SDK_ROOT }
+    if (-not $sdk) {
+        if (-not $env:LOCALAPPDATA) {
+            throw "Android SDK location unknown: set ANDROID_HOME (or ANDROID_SDK_ROOT) to the SDK folder, or create android/local.properties with sdk.dir=<path>, then re-run."
+        }
+        $sdk = Join-Path $env:LOCALAPPDATA "Android\Sdk"
+    }
+    if (Test-Path -LiteralPath $sdk) {
+        $escaped = $sdk -replace '\\', '\\'
+        Set-Content -LiteralPath $localProps -Value "sdk.dir=$escaped" -Encoding ASCII
+        Write-Host "Wrote $localProps"
+    }
+    else {
+        Write-Warning "Android SDK not found at $sdk; leaving android/local.properties absent. Set ANDROID_HOME or create local.properties before building."
+    }
 }
 
 $sha = (Get-FileHash -LiteralPath $rom -Algorithm SHA256).Hash.Substring(0, 12).ToLowerInvariant()
@@ -55,12 +66,26 @@ $outName = "Moon-Dancer-private-$sha-android.apk"
 $outPath = Join-Path $dist $outName
 
 $baked = $false
+$backedUp = $false
+$backup = "$asset.pre-bundle"
 try {
     if (-not (Test-Path -LiteralPath $assetDir)) {
         New-Item -ItemType Directory -Path $assetDir -Force | Out-Null
     }
-    Copy-Item -LiteralPath $rom -Destination $asset -Force
+    # A file staged by hand in the assets tree is the user's: park it and put
+    # it back in `finally` rather than overwriting or deleting it.  A leftover
+    # backup means an earlier run was interrupted; refuse rather than guess.
+    if (Test-Path -LiteralPath $backup) {
+        throw "A leftover assets/mwalk.zip.pre-bundle exists (an earlier run may have been interrupted). Inspect and move it away, then re-run."
+    }
+    if (Test-Path -LiteralPath $asset) {
+        Move-Item -LiteralPath $asset -Destination $backup
+        $backedUp = $true
+        Write-Host "Backed up the existing assets/mwalk.zip to $(Split-Path -Leaf $backup)"
+    }
+    # Set before the copy so a failed or partial Copy-Item is still cleaned up.
     $baked = $true
+    Copy-Item -LiteralPath $rom -Destination $asset -Force
     Write-Host ("Bundled {0} as assets/mwalk.zip ({1:N0} bytes)" -f (Split-Path -Leaf $rom), (Get-Item -LiteralPath $asset).Length)
 
     if (-not $SkipBuild) {
@@ -105,6 +130,15 @@ try {
 
     New-Item -ItemType Directory -Path $dist -Force | Out-Null
     Copy-Item -LiteralPath $apkIn -Destination $outPath -Force
+    # The dist artifact is the only copy that should keep the ROM.  Remove the
+    # build-tree APK and the merged asset copy Gradle made from it, so a later
+    # `assembleDebug` cannot quietly package yesterday's game data.
+    Remove-Item -LiteralPath $apkIn -Force
+    $mergedAsset = Join-Path $project "app\build\intermediates\assets\debug\mwalk.zip"
+    if (Test-Path -LiteralPath $mergedAsset) {
+        Remove-Item -LiteralPath $mergedAsset -Force
+    }
+    Write-Host "Removed the build-tree APK ($outName is the only ROM-bearing copy)"
     Write-Host ""
     Write-Host "Built $outPath"
     Write-Host ("  ROM inside: assets/mwalk.zip ({0:N0} bytes), sha256 {1}..." -f $romBytes, $sha)
@@ -115,6 +149,10 @@ finally {
     if ($baked -and (Test-Path -LiteralPath $asset)) {
         Remove-Item -LiteralPath $asset -Force
         Write-Host "Removed the temporary assets/mwalk.zip"
+    }
+    if ($backedUp -and (Test-Path -LiteralPath $backup)) {
+        Move-Item -LiteralPath $backup -Destination $asset
+        Write-Host "Restored the pre-existing assets/mwalk.zip"
     }
 }
 

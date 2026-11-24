@@ -176,7 +176,8 @@ Working:
   app's files directory on Android — not relative to the shell's working
   directory. `--nvram FILE` overrides the path and `--no-nvram` disables every
   write, including the Android periodic flush (a running game rewrites the
-  image every 30 s so a killed process loses at most that window). Credits are
+  image every 30 s; backgrounding and a clean exit save immediately — see the
+  Android section for the exact force-kill contract). Credits are
   battery-backed and survive a relaunch, as on the board. The high-score table
   is volatile — the game rebuilds its factory table at every cold boot; see the
   Android section for the board-oracle evidence.
@@ -317,8 +318,9 @@ cd android
 ```
 
 The artifact is `android\app\build\outputs\apk\debug\app-debug.apk`.
-Sideload it with `adb install -r app-debug.apk`, or copy the APK to the device
-and open it. Launch **Moon Dancer**.
+Sideload it (from `android/`) with
+`adb install -r app/build/outputs/apk/debug/app-debug.apk`, or copy the APK to
+the device and open it. Launch **Moon Dancer**.
 
 The variant stays `debug` deliberately: it installs without a keystore, while
 the native code is pinned to `-O3` (see [Performance](#performance)). A
@@ -364,7 +366,8 @@ three, with per-player rebinding and GUID-based slots).
 
 The app launches immersive: the system bars are hidden from the first frame
 and FULLSCREEN is on by default for a fresh Android install (the toggle still
-turns it off and saves that choice).
+turns it off for the game window and saves that choice; the launcher itself is
+always immersive).
 
 ### Performance
 
@@ -389,7 +392,11 @@ the same optimized APK, verifies `assets/mwalk.zip` is inside, names it
 `dist/Moon-Dancer-private-<sha12>-android.apk` (the hash is of your archive),
 and prints a never-publish warning. On first launch the app extracts the
 bundled archive to `files/mwalk.zip` — never clobbering an archive you imported
-yourself — so the launcher is ready without the picker.
+yourself — so the launcher is ready without the picker. Extraction is stamped:
+installing the private APK *over* an existing install that already ran the same
+asset version skips it, and the launcher can then show **NO ARCHIVE SELECTED**
+if you had not imported one. For the bundled archive to appear, install it
+clean (uninstall first) or clear the app's data.
 
 **That APK contains game data. Never publish, upload or share it.** The plain
 public build above ships no ROM data, but its `libmain.so` still contains
@@ -400,10 +407,13 @@ the same rule as a locally built `mwalk.exe`.
 
 Work RAM is the board's battery-backed 16 KiB NVRAM. Android saves it to
 `files/nvram/mwalk/nvram` and flushes it every 30 s while a player is actually
-in play (plus the save on a clean exit); `--no-nvram` disables both, exactly as
-on desktop. A force-stop therefore loses at most the last 30 s. The image is
-restored *after* the board reset clears work RAM, so its bytes are present when
-the game executes its first instruction — exactly the order MAME uses.
+in play, plus a save when the app is backgrounded and at a clean exit;
+`--no-nvram` disables all of them, exactly as on desktop. Changes made while in
+play flush every 30 s; a force-kill at the attract screen before any of those
+saves still loses coins inserted since the last save (coining up there changes
+the credit byte, but nothing flushes it on a timer). The image is restored
+*after* the board reset clears work RAM, so its bytes are present when the game
+executes its first instruction — exactly the order MAME uses.
 
 **Credits persist.** A saved image holding 9 credits boots with `CREDITS 9` on
 the attract screen, and the image written at exit still holds the same counter.
@@ -424,8 +434,10 @@ serial EEPROM that could keep them elsewhere. The evidence:
   survive the next boot either; the attract showed `TOP 50000`.
 
 So the missing piece is not an emulated EEPROM: Moonwalker simply does not
-persist score tables across power cycles. Everything else in the image is
-preserved byte-for-byte.
+persist score tables across power cycles. The persistence path was checked on
+the bytes that matter here — the credit counter and a game-written score slot,
+compared against MAME — while the port and MAME still differ in the known
+work-RAM scratch/stack bytes documented in `docs/PORTING_NOTES.md`.
 
 ## ROM setup
 

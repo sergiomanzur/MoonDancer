@@ -458,10 +458,16 @@ int mw_game_main(int argc, char **argv)
      * One line at boot: a rejected image (wrong size, e.g. a torn write from
      * an older build) is otherwise indistinguishable from a first run. */
     if (nvram_on) {
-        if (s18_load_nvram(&machine, nvram) == 0)
+        if (s18_load_nvram(&machine, nvram) == 0) {
             SDL_Log("NVRAM: loaded %s", nvram);
-        else
+        } else {
+            /* s18_load_nvram() copies whatever it managed to fread before
+             * rejecting a short image.  Reset again so "starting clean" is
+             * literally true: a torn legacy image must not leave half its
+             * bytes in work RAM for the boot code to interpret. */
+            mw_m68k_reset(&machine);
             SDL_Log("NVRAM: starting clean (no usable image at %s)", nvram);
+        }
     }
     machine.display_enable = 1;
     machine.vdp_enable = 0;
@@ -651,6 +657,27 @@ int mw_game_main(int argc, char **argv)
             case SDL_QUIT:
                 running = 0;
                 break;
+#ifdef __ANDROID__
+            /* Home/the recents gesture backgrounds the app, and Android may
+             * kill it there without ever reaching the exit save.  The 30 s
+             * in-play flush does not run at the attract screen, yet coining
+             * up at attract changes the credit byte, so save on the way out
+             * of the foreground as well.  This is also the last reliable
+             * point for an overlay-left-open session. --no-nvram gates it
+             * like every other write. */
+            case SDL_APP_WILLENTERBACKGROUND:
+                if (nvram_on) {
+                    if (s18_save_nvram(&machine, nvram) == 0) {
+                        SDL_Log("NVRAM: background save ok (%s)", nvram);
+                        /* Don't redo the same write on the first in-play tick
+                         * after resuming. */
+                        last_nvram_save = SDL_GetTicks();
+                    } else {
+                        SDL_Log("NVRAM: background save failed (%s)", nvram);
+                    }
+                }
+                break;
+#endif
             case SDL_KEYDOWN:
                 if (capture_busy) break;
                 key_state[event.key.keysym.scancode] = 1;
@@ -912,10 +939,12 @@ int mw_game_main(int argc, char **argv)
          * force-stop or a low-memory reclaim: the process is killed.  The real
          * board's NVRAM is battery-backed, so flush the workram image
          * periodically -- but only while a player is actually in play
-         * (game_in_play) and the game is not paused behind an overlay: the
-         * attract screens and the overlays write nothing, so those windows
-         * would only rewrite identical bytes.  --no-nvram disables this too:
-         * nvram_on gates every write, including the exit save below.
+         * (game_in_play) and the game is not paused behind an overlay.  That
+         * gate avoids rewriting an unchanged image every 30 s; it does NOT
+         * mean nothing changes outside play (coining up at the attract
+         * changes the credit byte).  Those out-of-play changes are covered by
+         * the background save above and the clean-exit save below.  --no-nvram
+         * disables every one of these writes.
          * What a relaunch restores is up to the game: Moonwalker keeps its
          * credit counter (battery-backed) but re-initializes the high-score
          * table at every cold boot, so an image does not bring old scores

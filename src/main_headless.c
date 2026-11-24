@@ -160,10 +160,15 @@ int main(int argc, char **argv)
      * (The game's own boot code still initialises its variables, so this is
      * a memory image, not a resumable save state.) */
     if (nvram) {
-        if (s18_load_nvram(&machine, nvram) == 0)
-            fprintf(stderr, "loaded nvram %s\n", nvram);
-        else
-            fprintf(stderr, "no nvram %s (starting clean)\n", nvram);
+        if (s18_load_nvram(&machine, nvram) == 0) {
+            fprintf(stderr, "NVRAM: loaded %s\n", nvram);
+        } else {
+            /* A short image leaves a partial copy in work RAM; reset again so
+             * "starting clean" means what it says (same contract as the SDL
+             * front end). */
+            mw_m68k_reset(&machine);
+            fprintf(stderr, "NVRAM: starting clean (no usable image at %s)\n", nvram);
+        }
     }
     mw_m68k_set_trace(trace || tracefile, tracefile ? fopen(tracefile, "w") : NULL);
     if (record) mw_m68k_set_record(1);
