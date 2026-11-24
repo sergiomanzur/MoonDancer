@@ -447,16 +447,22 @@ int mw_game_main(int argc, char **argv)
         MW_MKDIR(nvram_root);
         snprintf(nvram_root, sizeof(nvram_root), "%snvram/mwalk", data_dir);
         MW_MKDIR(nvram_root);
-        /* One line at boot: a rejected image (wrong size, e.g. a torn write
-         * from an older build) is otherwise indistinguishable from a first
-         * run, and the device checks look for exactly this line. */
+    }
+    mw_m68k_init(&machine);
+    mw_m68k_reset(&machine);
+    /* The image is restored AFTER the reset pulse: mw_m68k_reset() runs
+     * s18_reset(), which clears work RAM, so a load before it was silently
+     * discarded (the boot looked clean and the game rebuilt its defaults).
+     * Ordering it here matches the headless tool and MAME, where the NVRAM
+     * contents are present before the CPU executes its first instruction.
+     * One line at boot: a rejected image (wrong size, e.g. a torn write from
+     * an older build) is otherwise indistinguishable from a first run. */
+    if (nvram_on) {
         if (s18_load_nvram(&machine, nvram) == 0)
             SDL_Log("NVRAM: loaded %s", nvram);
         else
             SDL_Log("NVRAM: starting clean (no usable image at %s)", nvram);
     }
-    mw_m68k_init(&machine);
-    mw_m68k_reset(&machine);
     machine.display_enable = 1;
     machine.vdp_enable = 0;
     /* Keep the widescreen game view (and expanded culling) active from
@@ -905,14 +911,15 @@ int mw_game_main(int argc, char **argv)
         /* Android never reaches the save at the bottom of this function on a
          * force-stop or a low-memory reclaim: the process is killed.  The real
          * board's NVRAM is battery-backed, so flush the workram image
-         * periodically -- but only while a game is actually running
-         * (game_started) and not paused behind an overlay, which is the only
-         * window in which the image changes.  --no-nvram disables this too:
+         * periodically -- but only while a player is actually in play
+         * (game_in_play) and the game is not paused behind an overlay: the
+         * attract screens and the overlays write nothing, so those windows
+         * would only rewrite identical bytes.  --no-nvram disables this too:
          * nvram_on gates every write, including the exit save below.
-         * What a relaunch restores is up to the game: Moonwalker
-         * re-initializes its credit counter and high-score table at boot, so an
-         * image alone does not bring those back.  Desktop keeps its shipped
-         * save-on-exit behavior. */
+         * What a relaunch restores is up to the game: Moonwalker keeps its
+         * credit counter (battery-backed) but re-initializes the high-score
+         * table at every cold boot, so an image does not bring old scores
+         * back.  Desktop keeps its shipped save-on-exit behavior. */
         if (nvram_on && game_started && !paused && !settings_open &&
             game_in_play(&machine) &&
             SDL_GetTicks() - last_nvram_save >= MW_NVRAM_FLUSH_MS) {

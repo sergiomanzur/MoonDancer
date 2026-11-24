@@ -829,7 +829,12 @@ int s18_save_nvram(const s18_t *m, const char *path)
     if (!f)
         return -1;
     n = fwrite(m->workram, 1, sizeof(m->workram), f);
-    if (n != sizeof(m->workram) || fclose(f) != 0) {
+    if (n != sizeof(m->workram)) {
+        fclose(f);
+        remove(tmp);
+        return -1;
+    }
+    if (fclose(f) != 0) {
         remove(tmp);
         return -1;
     }
