@@ -34,7 +34,17 @@ android {
                 // libmain.so carries all of our code; SDL2 is built as a
                 // shared library by the same CMake project (add_subdirectory).
                 // arm64-v8a only: the shipping target is the Retroid Pocket 6.
-                arguments "-DANDROID_STL=c++_static", "-DSDL_STATIC=OFF"
+                //
+                // Release native code even in the debug variant.  AGP hands
+                // CMake -DCMAKE_BUILD_TYPE=Debug for `assembleDebug`, which
+                // means -O0: the emulator core (translated 68000 + software
+                // renderer + ymfm) then overruns the 60 fps frame budget and
+                // starves the audio callback (low FPS + crackle on device).
+                // The APK stays debuggable (Java layer, manifest, symbols);
+                // only the native optimization level changes.  Listed after
+                // AGP's own -D so it wins.
+                arguments "-DANDROID_STL=c++_static", "-DSDL_STATIC=OFF",
+                          "-DCMAKE_BUILD_TYPE=Release"
                 abiFilters 'arm64-v8a'
             }
         }
