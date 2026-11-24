@@ -172,7 +172,9 @@ Working:
   text RAM are byte-identical at frame 1200 with the same inputs.
 - NVRAM persistence: work RAM is the board's 16 KiB NVRAM (settings, high
   scores, bookkeeping). The SDL build loads/saves `nvram/mwalk/nvram`;
-  `--nvram FILE` / `--no-nvram` override it.
+  `--nvram FILE` / `--no-nvram` override it. `--no-nvram` disables every
+  write, including the Android periodic flush (a running game rewrites the
+  image every 30 s so a killed process loses at most that window).
 - Fixed a 68000 recompiler bug where register bit operations (`BSET`,
   `BCLR`, `BCHG`, `BTST Dn,Dn`) were emitted as byte operations instead of
   32-bit operations. This was corrupting the palette shadow buffer during

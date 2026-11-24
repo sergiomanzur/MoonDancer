@@ -808,14 +808,39 @@ int s18_load_nvram(s18_t *m, const char *path)
     return n == sizeof(m->workram) ? 0 : -1;
 }
 
+/* Writes the workram image through a sibling .tmp file and renames it over the
+ * destination.  The bytes written are unchanged (the whole workram, same order);
+ * only the file dance is new: a process killed mid-write must not leave a short
+ * image behind, because s18_load_nvram rejects a wrong-sized file and the next
+ * boot would silently start clean.  rename() is atomic and replaces the target
+ * on POSIX (Android/Linux); on Windows rename() refuses an existing target, so
+ * the old file is removed first there -- the same non-atomic window the
+ * truncate-and-write path always had on that host. */
 int s18_save_nvram(const s18_t *m, const char *path)
 {
-    FILE *f = fopen(path, "wb");
+    char tmp[2100];
+    FILE *f;
+    size_t n;
+
+    if (!m || !path || !*path) return -1;
+    if (snprintf(tmp, sizeof(tmp), "%s.tmp", path) >= (int)sizeof(tmp)) return -1;
+
+    f = fopen(tmp, "wb");
     if (!f)
         return -1;
-    size_t n = fwrite(m->workram, 1, sizeof(m->workram), f);
-    fclose(f);
-    return n == sizeof(m->workram) ? 0 : -1;
+    n = fwrite(m->workram, 1, sizeof(m->workram), f);
+    if (n != sizeof(m->workram) || fclose(f) != 0) {
+        remove(tmp);
+        return -1;
+    }
+#ifdef _WIN32
+    remove(path);
+#endif
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return -1;
+    }
+    return 0;
 }
 
 void s18_run_frame(s18_t *m)

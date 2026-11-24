@@ -43,11 +43,27 @@
 #define GAME_SDL_QUIT() SDL_Quit()
 #endif
 
-/* Android only: how often the workram image is flushed to nvram/... while the
- * game runs.  A force-stop or a low-memory reclaim kills the process without
- * reaching the save at the bottom of mw_game_main, so the image would be as
- * old as the last clean exit. */
-#define MW_NVRAM_FLUSH_MS 2000
+/* Android only: how often the workram image is flushed to nvram/... while a
+ * game is actually running.  A force-stop or a low-memory reclaim kills the
+ * process without reaching the save at the bottom of mw_game_main, so the
+ * image would be as old as the last clean exit.  30 s at 16 KiB is ~2 MB/hour
+ * of flash, and only while a game is in play: the attract screen and the
+ * overlays write nothing. */
+#define MW_NVRAM_FLUSH_MS 30000
+
+#ifdef __ANDROID__
+/* Is a player actually in play?  game_started is a sticky latch (it also picks
+ * the display mode and is never cleared), so on its own it stays true in the
+ * attract after the first game -- exactly the window the periodic NVRAM flush
+ * must skip.  The player status blocks are zeroed in the attract, and the
+ * player-id byte (0x37/0x38/0x39 at these addresses) is the stable "this player
+ * joined" marker (docs/cheats-addresses.md, the same gate cheats_apply uses). */
+static int game_in_play(const s18_t *m)
+{
+    return m->workram[0x1A5D] != 0 || m->workram[0x1A9D] != 0 ||
+           m->workram[0x1ADD] != 0;
+}
+#endif
 
 static uint8_t key_state[SDL_NUM_SCANCODES];
 static uint8_t key_latch[SDL_NUM_SCANCODES];
@@ -431,7 +447,13 @@ int mw_game_main(int argc, char **argv)
         MW_MKDIR(nvram_root);
         snprintf(nvram_root, sizeof(nvram_root), "%snvram/mwalk", data_dir);
         MW_MKDIR(nvram_root);
-        s18_load_nvram(&machine, nvram);
+        /* One line at boot: a rejected image (wrong size, e.g. a torn write
+         * from an older build) is otherwise indistinguishable from a first
+         * run, and the device checks look for exactly this line. */
+        if (s18_load_nvram(&machine, nvram) == 0)
+            SDL_Log("NVRAM: loaded %s", nvram);
+        else
+            SDL_Log("NVRAM: starting clean (no usable image at %s)", nvram);
     }
     mw_m68k_init(&machine);
     mw_m68k_reset(&machine);
@@ -883,16 +905,21 @@ int mw_game_main(int argc, char **argv)
         /* Android never reaches the save at the bottom of this function on a
          * force-stop or a low-memory reclaim: the process is killed.  The real
          * board's NVRAM is battery-backed, so flush the workram image
-         * periodically while the machine runs; a kill then loses at most this
-         * window.  Verified on device: the image on disk carries the live
-         * credit counter (workram 0x2000) within one window of inserting coins.
-         * What a relaunch restores is up to the game -- Moonwalker
+         * periodically -- but only while a game is actually running
+         * (game_started) and not paused behind an overlay, which is the only
+         * window in which the image changes.  --no-nvram disables this too:
+         * nvram_on gates every write, including the exit save below.
+         * What a relaunch restores is up to the game: Moonwalker
          * re-initializes its credit counter and high-score table at boot, so an
          * image alone does not bring those back.  Desktop keeps its shipped
          * save-on-exit behavior. */
-        if (!paused && !settings_open &&
+        if (nvram_on && game_started && !paused && !settings_open &&
+            game_in_play(&machine) &&
             SDL_GetTicks() - last_nvram_save >= MW_NVRAM_FLUSH_MS) {
-            s18_save_nvram(&machine, nvram);
+            if (s18_save_nvram(&machine, nvram) == 0)
+                SDL_Log("NVRAM: periodic flush ok (%s)", nvram);
+            else
+                SDL_Log("NVRAM: periodic flush failed (%s)", nvram);
             last_nvram_save = SDL_GetTicks();
         }
 #endif

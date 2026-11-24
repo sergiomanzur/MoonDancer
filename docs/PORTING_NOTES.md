@@ -208,9 +208,10 @@ hash files.
   input-pipeline / task-order difference in the board model, not a
   translated-68000 error.
 - Work RAM is NVRAM-backed on the real board. The SDL build loads/saves
-  `nvram/mwalk/nvram`; `--nvram FILE` / `--no-nvram` override it. Use a
-  fresh image for comparisons, since a stale MAME NVRAM made the earlier
-  port-vs-MAME diff look like ~1.5 KiB.
+  `nvram/mwalk/nvram`; `--nvram FILE` / `--no-nvram` override it. `--no-nvram`
+  disables every write (the exit save and the Android 30 s flush of a running
+  game). Use a fresh image for comparisons, since a stale MAME NVRAM made the
+  earlier port-vs-MAME diff look like ~1.5 KiB.
 - A recompiler bug was found in the palette fade: `BSET D7,D4` is a 32-bit
   register bit operation, but the generator emitted a byte-sized bitop
   because the disassembler omits the `.l` suffix. Bits 8-15 were lost,

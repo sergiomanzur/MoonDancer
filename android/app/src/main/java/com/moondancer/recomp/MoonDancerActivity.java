@@ -122,11 +122,11 @@ public class MoonDancerActivity extends SDLActivity {
             tmp.delete();
             return;
         }
-        if (dest.exists() && !dest.delete()) {
-            Log.e(TAG, "could not replace " + dest);
-            tmp.delete();
-            return;
-        }
+        // rename() replaces an existing target atomically on Android (POSIX
+        // semantics), and -tmp is on the same filesystem, so the previous
+        // archive stays intact until the very moment the new one takes its
+        // place.  Deleting the target first (as this used to) opened a window
+        // in which a crash left the launcher with no archive at all.
         if (!tmp.renameTo(dest)) {
             Log.e(TAG, "could not rename " + tmp + " to " + dest);
             tmp.delete();
@@ -134,7 +134,16 @@ public class MoonDancerActivity extends SDLActivity {
         }
 
         Log.i(TAG, "ROM imported: " + uri + " -> " + dest + " (" + total + " bytes)");
-        nativeRomImported(dest.getAbsolutePath());
+        try {
+            nativeRomImported(dest.getAbsolutePath());
+        } catch (UnsatisfiedLinkError e) {
+            // JNI_OnLoad could not register this method (it logs the reason).
+            // The import itself succeeded: files/mwalk.zip is in place, so the
+            // launcher's find_default_zip() picks it up on the next launch.
+            // Swallowing the linkage error keeps a failed notification from
+            // killing the UI thread.
+            Log.e(TAG, "nativeRomImported unavailable; archive left in place", e);
+        }
     }
 
     /**
