@@ -69,7 +69,13 @@ try {
         }
         Push-Location $project
         try {
-            & $gradlew :app:assembleDebug
+            # --no-daemon: a detached Gradle daemon inherits this script's
+            # process tree, so a caller that waits for the whole tree (CI,
+            # Start-Process -Wait) would appear to hang long after the APK is
+            # written.  A packaging run is infrequent enough that the cold
+            # start does not matter.  --console=plain keeps the log readable
+            # when stdout is redirected to a file.
+            & $gradlew :app:assembleDebug --no-daemon --console=plain
             if ($LASTEXITCODE -ne 0) {
                 throw "Gradle assembleDebug failed with exit code $LASTEXITCODE"
             }
