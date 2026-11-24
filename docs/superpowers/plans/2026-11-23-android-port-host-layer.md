@@ -30,7 +30,7 @@ Failure modes the spec implies but task tests don't fully exercise; each pinned 
 3. **Old `settings.ini` without `touch_on`/`touch_mode` keys** loads defaults — Task 6's old-file harness assertion (same pattern as 0.9.0b fields).
 4. **Floating joystick ghost diagonals** — a finger resting at the stick edge must not register UP+RIGHT simultaneously; Task 6's mapping harness asserts the dead-zone: offset `< 0.18` of the stick radius yields zero direction bits.
 5. **In-process re-entry leak** — QUIT GAME → START GAME again in one process must re-open audio/pads cleanly; Task 8's device steps run the game twice in one activity session.
-6. **NVRAM on Android** — Task 9 proved the file persists and loads byte-level (`workram[0x2000]` verified on disk after force-stop). Credits are volatile **by the game's own design** (the board resets them on power cycle) — the plumbing requirement is "file survives force-stop and is loaded", which passes. High scores are the open question and move to Task 10: run a real scored game-over, relaunch, and compare against MAME with/without its `.nv` — the port emulates no serial EEPROM (the likely validity source), so the investigation decides between EEPROM emulation and documenting faithful behavior.
+6. **NVRAM on Android** — resolved by the Task 10 MAME-oracle investigation: the port initially loaded NVRAM *before* `mw_m68k_reset()` cleared work RAM, so every launch silently started clean — that bug was found and fixed (load after reset; `CREDITS 9`-verified on device). Credits now persist via the 30 s in-play flush + background save + exit save. High scores are volatile **by faithful design**: MAME 0.289's mwalk driver has no EEPROM and resets a game-written entry to the factory table exactly like this port.
 
 ---
 
