@@ -1,0 +1,82 @@
+// Moon Dancer Android application module.
+//
+// Derived from SDL2 2.30.11's android-project/app/build.gradle (fetched into
+// third_party/SDL2 by tools/fetch_sdl2_source.py).  The ndkBuild template was
+// replaced with a dedicated CMakeLists that builds libmain.so from this
+// repository's sources and SDL2 built from source.
+
+def buildAsLibrary = project.hasProperty('BUILD_AS_LIBRARY');
+def buildAsApplication = !buildAsLibrary
+if (buildAsApplication) {
+    apply plugin: 'com.android.application'
+}
+else {
+    apply plugin: 'com.android.library'
+}
+
+android {
+    if (buildAsApplication) {
+        namespace "com.moondancer.recomp"
+    }
+    compileSdkVersion 34
+    ndkVersion "26.2.11394342"
+
+    defaultConfig {
+        if (buildAsApplication) {
+            applicationId "com.moondancer.recomp"
+        }
+        minSdkVersion 26
+        targetSdkVersion 34
+        versionCode 1
+        versionName "0.1"
+        externalNativeBuild {
+            cmake {
+                // libmain.so carries all of our code; SDL2 is built as a
+                // shared library by the same CMake project (add_subdirectory).
+                // arm64-v8a only: the shipping target is the Retroid Pocket 6.
+                arguments "-DANDROID_STL=c++_static", "-DSDL_STATIC=OFF"
+                abiFilters 'arm64-v8a'
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    applicationVariants.all { variant ->
+        tasks["merge${variant.name.capitalize()}Assets"]
+            .dependsOn("externalNativeBuild${variant.name.capitalize()}")
+    }
+    if (!project.hasProperty('EXCLUDE_NATIVE_LIBS')) {
+        sourceSets.main {
+            jniLibs.srcDir 'libs'
+        }
+        externalNativeBuild {
+            cmake {
+                path 'src/main/jni/CMakeLists.txt'
+            }
+        }
+
+    }
+    lint {
+        abortOnError false
+    }
+
+    if (buildAsLibrary) {
+        libraryVariants.all { variant ->
+            variant.outputs.each { output ->
+                def outputFile = output.outputFile
+                if (outputFile != null && outputFile.name.endsWith(".aar")) {
+                    def fileName = "com.moondancer.recomp.aar";
+                    output.outputFile = new File(outputFile.parent, fileName)
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+}

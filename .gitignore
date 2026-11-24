@@ -16,6 +16,15 @@ src/generated_game.c
 # Emulator test oracle binary tree
 tools/mame_dist/
 
+# Android build
+android/.gradle/
+android/app/.cxx/
+android/app/build/
+android/build/
+android/local.properties
+# SDL2 source fetched by tools/fetch_sdl2_source.py for the Android build
+third_party/SDL2/
+
 # Runtime state
 nvram/
 *.log

@@ -4,7 +4,8 @@
  * Every path the game writes or reads from the install tree goes through
  * these functions so the Android and SteamOS ports can swap the policy in one
  * place.  Each entry point is written as a single per-platform branch;
- * Windows and Linux share the portable-folder layout for now.
+ * Windows and Linux share the portable-folder layout, Android uses the app's
+ * internal files directory.
  */
 #include "host_port.h"
 
@@ -25,11 +26,40 @@
 #include <unistd.h>
 #endif
 
-/* Read-only asset dir.  Packaged builds keep fonts/ and the launcher
+#ifdef __ANDROID__
+/* Android has no writable install tree: SDL_GetBasePath() is unsupported
+ * there (it returns NULL), and the APK's assets/ are read-only.  Both the
+ * asset dir and the writable data dir are the app's internal files directory;
+ * mw_host_extract_assets() copies the files the UI loads into it on first
+ * run.  Returns the path with a trailing separator. */
+static int pref_dir(char *buf, int cap)
+{
+    char *pref;
+    int n;
+
+    if (!buf || cap <= 0) return 0;
+    buf[0] = '\0';
+    pref = SDL_GetPrefPath("MoonwalkerRecomp", "Moonwalker");
+    if (!pref) return 0;
+    n = snprintf(buf, (size_t)cap, "%s", pref);
+    SDL_free(pref);
+    if (n < 0 || n >= cap) {
+        buf[0] = '\0';
+        return 0;
+    }
+    return 1;
+}
+#endif
+
+/* Read-only asset dir.  Packaged desktop builds keep fonts/ and the launcher
  * background beside the executable, which is what SDL_GetBasePath reports.
+ * Android uses the app's files directory, where the APK assets are extracted.
  * Returns the path with SDL's trailing separator. */
 int mw_host_base_dir(char *buf, int cap)
 {
+#ifdef __ANDROID__
+    return pref_dir(buf, cap);
+#else
     char *base;
     int n;
 
@@ -45,6 +75,7 @@ int mw_host_base_dir(char *buf, int cap)
         return 0;
     }
     return 1;
+#endif
 }
 
 /* Writable state (NVRAM, screenshots).  Same folder as the assets today, so a
@@ -54,12 +85,6 @@ int mw_host_base_dir(char *buf, int cap)
 int mw_host_data_dir(char *buf, int cap)
 {
     return mw_host_base_dir(buf, cap);
-}
-
-/* No APK asset bundle to unpack on desktop hosts: fonts and the background are
- * already files next to the executable. */
-void mw_host_extract_assets(void)
-{
 }
 
 static int file_exists(const char *p)
@@ -91,6 +116,108 @@ static HWND window_hwnd(SDL_Window *window)
     if (SDL_GetWindowWMInfo(window, &info) && info.subsystem == SDL_SYSWM_WINDOWS)
         return info.info.win.window;
     return NULL;
+}
+#endif
+
+#ifdef __ANDROID__
+/* Everything the UI loads at runtime: copied out of the APK into the app's
+ * files directory (mw_host_base_dir) so ImGui's plain-path font loader and
+ * stb_image can read them with ordinary file I/O. */
+static const char *const k_apk_assets[] = {
+    "fonts/Audiowide-Regular.ttf",
+    "fonts/Rajdhani-Bold.ttf",
+    "fonts/Rajdhani-Regular.ttf",
+    "fonts/Rajdhani-SemiBold.ttf",
+    "fonts/OFL-Audiowide.txt",
+    "fonts/OFL-Rajdhani.txt",
+    "launcher_background.jfif",
+};
+
+/* APK asset -> file.  SDL_RWFromFile reads APK assets through SDL's JNI
+ * bridge; a plain fopen() cannot see them at all. */
+static int copy_asset(const char *src, const char *dst)
+{
+    SDL_RWops *in = SDL_RWFromFile(src, "rb");
+    SDL_RWops *out;
+    char buf[16384];
+    size_t n;
+    int ok = 1;
+
+    if (!in) return 0;
+    out = SDL_RWFromFile(dst, "wb");
+    if (!out) {
+        SDL_RWclose(in);
+        return 0;
+    }
+    while ((n = SDL_RWread(in, buf, 1, sizeof(buf))) > 0) {
+        if (SDL_RWwrite(out, buf, 1, n) != n) {
+            ok = 0;
+            break;
+        }
+    }
+    SDL_RWclose(in);
+    if (SDL_RWclose(out) != 0) ok = 0;
+    return ok;
+}
+
+/* First run: copy the APK's assets/ payload into the files directory.  A
+ * marker file in that directory skips the copy on later runs (delete it, or
+ * the app's data, to force a re-extract).  assets/mwalk.zip is only present
+ * in private builds; when it is there it is unpacked to files/mwalk.zip,
+ * which is exactly where the launcher's find_default_zip() looks. */
+void mw_host_extract_assets(void)
+{
+    char base[2048], dst[3072], path[3072];
+    char marker[3072];
+    size_t i;
+    FILE *m;
+    int ok = 1;
+
+    if (!mw_host_base_dir(base, (int)sizeof(base))) return;
+    snprintf(marker, sizeof(marker), "%sassets/.extracted", base);
+    if (file_exists(marker)) return;
+
+    snprintf(path, sizeof(path), "%sassets", base);
+    (void)mkdir(path, 0755);
+    snprintf(path, sizeof(path), "%sassets/fonts", base);
+    (void)mkdir(path, 0755);
+
+    for (i = 0; i < sizeof(k_apk_assets) / sizeof(k_apk_assets[0]); i++) {
+        snprintf(dst, sizeof(dst), "%sassets/%s", base, k_apk_assets[i]);
+        if (!copy_asset(k_apk_assets[i], dst)) {
+            fprintf(stderr, "Could not extract APK asset %s\n", k_apk_assets[i]);
+            ok = 0;
+        }
+    }
+
+    /* Optional: a ROM archive bundled for private builds (never the public
+     * artifact).  Do not clobber a file the player already placed there. */
+    {
+        SDL_RWops *rom = SDL_RWFromFile("mwalk.zip", "rb");
+        if (rom) {
+            SDL_RWclose(rom);
+            snprintf(dst, sizeof(dst), "%smwalk.zip", base);
+            if (!file_exists(dst) && !copy_asset("mwalk.zip", dst)) {
+                fprintf(stderr, "Could not extract the bundled mwalk.zip\n");
+                ok = 0;
+            }
+        }
+    }
+
+    /* No marker on a partial copy: the next launch retries instead of leaving
+     * the UI permanently on the fallback font. */
+    if (!ok) return;
+    m = fopen(marker, "wb");
+    if (m) {
+        fputs("1\n", m);
+        fclose(m);
+    }
+}
+#else
+/* No APK asset bundle to unpack on desktop hosts: fonts and the background are
+ * already files next to the executable. */
+void mw_host_extract_assets(void)
+{
 }
 #endif
 
@@ -134,9 +261,12 @@ int mw_host_browse_archive(SDL_Window *window, char *out, int cap)
 #endif
 }
 
-/* Start the game executable beside the launcher and wait for it.  The Win32
- * path hands keyboard focus across the process boundary; the POSIX path just
- * inherits the terminal and the window manager's focus policy. */
+/* Start the game and wait for it.  Windows: separate mwalk.exe process, with
+ * focus handed across the process boundary.  Linux: fork + exec of "mwalk"
+ * beside the launcher.  Android: there is no second executable, so
+ * mw_game_main() runs in this process on the activity's SDL thread; the
+ * caller has already released the launcher window (one window per activity).
+ * Returns the game's exit code. */
 int mw_host_spawn_game(const char *base, const char *archive, SDL_Window *self)
 {
     int is_dir = dir_exists(archive);
@@ -183,6 +313,21 @@ int mw_host_spawn_game(const char *base, const char *archive, SDL_Window *self)
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     return (int)code;
+#elif defined(__ANDROID__)
+    /* Same argv shape the desktop launcher passes to mwalk.exe: a zip archive
+     * or an extracted ROM directory.  Runs synchronously on SDLActivity's SDL
+     * thread, which is where mw_game_main must create its window and audio. */
+    {
+        char *argv[4];
+        int argc = 0;
+        (void)base;
+        (void)self;
+        argv[argc++] = (char *)"mwalk";
+        argv[argc++] = (char *)(is_dir ? "--rom-dir" : "--zip");
+        argv[argc++] = (char *)archive;
+        argv[argc] = NULL;
+        return mw_game_main(argc, argv);
+    }
 #else
     (void)self;
     char exe[2048];

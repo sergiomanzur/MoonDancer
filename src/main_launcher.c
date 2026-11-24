@@ -102,34 +102,82 @@ static void save_last_archive(const char *archive)
     fclose(f);
 }
 
+/* Build the launcher's window/renderer/UI triple.  Desktop calls it once at
+ * startup; Android also calls it after an in-process game run, because the
+ * launcher tears its own window down first (one window per activity). */
+static int create_surface(const char *base, const char *background,
+                          SDL_Window **out_window, SDL_Renderer **out_renderer,
+                          mw_ui **out_ui)
+{
+    SDL_Window *window = SDL_CreateWindow("Moonwalker // Launcher",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+    SDL_Renderer *renderer;
+    mw_ui *ui;
+
+    if (!window) {
+        fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
+        return 0;
+    }
+    renderer = SDL_CreateRenderer(window, -1,
+        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!renderer)
+        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+    if (!renderer) {
+        fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
+        SDL_DestroyWindow(window);
+        return 0;
+    }
+    SDL_SetRenderDrawColor(renderer, 2, 3, 8, 255);
+    mw_host_dark_titlebar(window);
+
+    ui = mw_ui_create(window, renderer, base, background);
+    if (!ui) {
+        fprintf(stderr, "Could not initialize the launcher UI.\n");
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        return 0;
+    }
+#ifdef __ANDROID__
+    /* Fullscreen landscape app: the window-size presets do not apply. */
+    mw_ui_set_caps(ui, MW_UI_CAP_NO_RESOLUTION);
+#else
+    /* Desktop host: no capability flags, so the SETTINGS panel is unchanged. */
+    mw_ui_set_caps(ui, 0);
+#endif
+    *out_window = window;
+    *out_renderer = renderer;
+    *out_ui = ui;
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
     int start_settings = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--settings")) start_settings = 1;
     }
+#ifdef __ANDROID__
+    /* Deliver BACK as a key event (SDL_SCANCODE_AC_BACK) instead of letting
+     * the activity finish: the launcher treats it like ESC, and the game uses
+     * it to toggle the overlay. */
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
+    /* SDLActivity chooses the requested orientation from SANITIZED window
+     * flags: a resizable window with no orientation hint becomes FULL_USER,
+     * which follows the device's rotation lock (portrait on a locked
+     * handheld).  Pinning the allowed orientations keeps the manifest's
+     * landscape contract for every window this process creates - launcher and
+     * game alike. */
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
-    SDL_Window *window = SDL_CreateWindow("Moonwalker // Launcher",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1280, 720,
-        SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
-    if (!window) {
-        fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
-        return 1;
-    }
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1,
-        SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer)
-        renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
-    if (!renderer) {
-        fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
-        return 1;
-    }
-    SDL_SetRenderDrawColor(renderer, 2, 3, 8, 255);
-    mw_host_dark_titlebar(window);
+    /* Android: one-time copy of the APK's fonts/background into the files
+     * dir; no-op on desktop, where those files sit beside the executable. */
+    mw_host_extract_assets();
 
     char base[2048];
     if (!mw_host_base_dir(base, (int)sizeof(base))) {
@@ -151,13 +199,11 @@ int main(int argc, char **argv)
     if (!file_exists(background))
         snprintf(background, sizeof(background), "%slauncher_background.jfif", base);
 
-    mw_ui *ui = mw_ui_create(window, renderer, base, background);
-    if (!ui) {
-        fprintf(stderr, "Could not initialize the launcher UI.\n");
+    SDL_Window *window = NULL;
+    SDL_Renderer *renderer = NULL;
+    mw_ui *ui = NULL;
+    if (!create_surface(base, background, &window, &renderer, &ui))
         return 1;
-    }
-    /* Desktop host: no capability flags, so the SETTINGS panel is unchanged. */
-    mw_ui_set_caps(ui, 0);
 
     char archive[2048];
     find_default_zip(base, archive, (int)sizeof(archive));
@@ -205,9 +251,12 @@ int main(int argc, char **argv)
                 if (capture_busy) break;
                 if (event.key.keysym.scancode == SDL_SCANCODE_F1) {
                     if (!fb.active) settings_open = !settings_open;
-                } else if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
-                    /* The browser is modal: ESC backs out of it before it can
-                     * reach the launcher's own settings toggle / quit. */
+                } else if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE ||
+                           event.key.keysym.scancode == SDL_SCANCODE_AC_BACK) {
+                    /* ESC, and Android BACK (trapped by the SDL hint) which
+                     * mirrors it: the browser is modal, so it backs out of
+                     * the browser first, then the settings panel, then the
+                     * launcher itself quits. */
                     if (fb.active) {
                         fb.active = 0;
                         fb.done = 0;
@@ -294,17 +343,35 @@ int main(int argc, char **argv)
                     settings_dirty = 0;
                 }
                 save_last_archive(archive);
-                /* Release the pads before handing the window to mwalk.exe so
-                 * the game opens them as the only consumer, then rebuild the
-                 * device view once control comes back.  The launcher music
-                 * releases its audio device for the same reason. */
+                /* Release the pads before the game opens them as the only
+                 * consumer, then rebuild the device view once control comes
+                 * back.  The launcher music releases its audio device for the
+                 * same reason. */
                 mw_music_stop();
                 music_playing = 0;
                 mw_input_shutdown();
+#ifdef __ANDROID__
+                /* One window per activity: the game creates its own, so the
+                 * launcher surface has to go first.  This is the exact
+                 * structural mirror of the desktop hide/show dance below,
+                 * with destroy/recreate instead of hide/show. */
+                mw_ui_destroy(ui);
+                ui = NULL;
+                SDL_DestroyRenderer(renderer);
+                renderer = NULL;
+                SDL_DestroyWindow(window);
+                window = NULL;
+                int rc = mw_host_spawn_game(base, archive, NULL);
+                if (!create_surface(base, background, &window, &renderer, &ui)) {
+                    fprintf(stderr, "Could not recreate the launcher surface.\n");
+                    return 1;
+                }
+#else
                 int rc = mw_host_spawn_game(base, archive, window);
                 SDL_ShowWindow(window);
                 SDL_RaiseWindow(window);
                 SDL_SetWindowInputFocus(window);
+#endif
                 mw_settings_load(&settings, settings_path);
                 mw_input_init();
                 mw_input_load_maps(&settings);
@@ -312,7 +379,11 @@ int main(int argc, char **argv)
                     music_playing = mw_music_start();
                 if (rc != 0 && rc != -1) {
                     char msg[256];
+#ifdef __ANDROID__
+                    snprintf(msg, sizeof(msg), "The game exited with code %d.", rc);
+#else
                     snprintf(msg, sizeof(msg), "mwalk.exe exited with code %d.", rc);
+#endif
                     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Moonwalker", msg, window);
                 }
             }

@@ -32,16 +32,31 @@ static int read_file(const char *dir, const char *name, uint8_t *out, size_t exp
 
 int mw_load_roms(const char *directory, uint8_t rom[0x80000], uint8_t key[0x2000])
 {
-    uint8_t a6[0x40000], a5[0x40000];
-    if (read_file(directory, "epr-13235.a6", a6, sizeof(a6)))
+    /* Heap, not stack: the two 256 KiB bank buffers plus the caller's 512 KiB
+     * ROM buffer overflow the ~1 MiB SDL thread stack on Android. */
+    uint8_t *a6 = (uint8_t *)malloc(0x40000);
+    uint8_t *a5 = (uint8_t *)malloc(0x40000);
+    int rc = -1;
+
+    if (!a6 || !a5) {
+        fprintf(stderr, "out of memory loading the ROM banks\n");
+        free(a6);
+        free(a5);
         return -1;
-    if (read_file(directory, "epr-13234.a5", a5, sizeof(a5)))
-        return -1;
+    }
+    if (read_file(directory, "epr-13235.a6", a6, 0x40000))
+        goto done;
+    if (read_file(directory, "epr-13234.a5", a5, 0x40000))
+        goto done;
     if (read_file(directory, "317-0159.key", key, 0x2000))
-        return -1;
+        goto done;
     for (size_t i = 0; i < 0x40000; i++) {
         rom[i * 2] = a6[i];
         rom[i * 2 + 1] = a5[i];
     }
-    return 0;
+    rc = 0;
+done:
+    free(a6);
+    free(a5);
+    return rc;
 }

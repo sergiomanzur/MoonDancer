@@ -353,6 +353,12 @@ int mw_game_main(int argc, char **argv)
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;
     }
+#else
+    /* The launcher's SDL_Init covers video/events/gamecontroller only; its
+     * music player opens and closes the audio subsystem lazily, so the game
+     * has to bring it up before audio_apply() opens its own device. */
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0)
+        fprintf(stderr, "SDL_InitSubSystem(AUDIO): %s\n", SDL_GetError());
 #endif
 
     /* Writable state (NVRAM, screenshots) follows the host policy instead of
@@ -394,7 +400,11 @@ int mw_game_main(int argc, char **argv)
     }
 
     static s18_t machine;
-    uint8_t rom[0x80000], key[0x2000];
+    /* Static, not stack: 512 KiB + 8 KiB on top of the loader's frames
+     * overflows Android's ~1 MiB SDL thread stack.  mw_game_main is a
+     * single-instance entry point (the in-process launcher), which is the
+     * same lifetime assumption `machine` below already makes. */
+    static uint8_t rom[0x80000], key[0x2000];
     if (mw_load_roms(romdir, rom, key)) {
         SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Moonwalker ROMs",
             "Could not load the Moonwalker ROM set.\n\nSelect mwalk.zip, or place the extracted "
@@ -516,9 +526,11 @@ int mw_game_main(int argc, char **argv)
     }
     SDL_SetTextureScaleMode(texture, SDL_ScaleModeNearest);
 
-    const char *base_sdl = SDL_GetBasePath();
+    /* Host asset policy: beside the executable on desktop, the extracted
+     * files dir on Android (SDL_GetBasePath is unsupported there). */
     char base[2048];
-    snprintf(base, sizeof(base), "%s", base_sdl ? base_sdl : "./");
+    if (!mw_host_base_dir(base, (int)sizeof(base)))
+        snprintf(base, sizeof(base), "./");
     mw_ui *ui = mw_ui_create(window, renderer, base, NULL);
     if (!ui) {
         fprintf(stderr, "Could not initialize the settings overlay.\n");
@@ -598,7 +610,14 @@ int mw_game_main(int argc, char **argv)
                     if (machine.workram[0x2000] > 0)
                         game_started = 1;
                 }
-                if (event.key.keysym.scancode == SDL_SCANCODE_F1) {
+                /* Android BACK is trapped by SDL_HINT_ANDROID_TRAP_BACK_BUTTON
+                 * (set by the launcher) and arrives as AC_BACK.  In game it
+                 * toggles the overlay exactly like F1 - never quits - so the
+                 * overlay stays the one place that offers QUIT. */
+                if (event.key.keysym.scancode == SDL_SCANCODE_AC_BACK) {
+                    settings_open = !settings_open;
+                    if (!settings_open) settings_dirty = 1;
+                } else if (event.key.keysym.scancode == SDL_SCANCODE_F1) {
                     settings_open = !settings_open;
                     if (!settings_open) settings_dirty = 1;
                 } else if (event.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {

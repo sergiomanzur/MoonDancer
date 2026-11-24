@@ -152,11 +152,15 @@ static void open_pad(int device_index)
     snprintf(slot->name, sizeof(slot->name), "%s", name ? name : "Controller");
     g_in.slots++;
     assign_pads();
+    /* Pairs with close_slot()'s log: on the handhelds this is the only
+     * evidence in logcat that SDL opened the built-in gamepad. */
+    SDL_Log("Game controller %d opened: %s", g_in.slots, slot->name);
 }
 
 static void close_slot(int s)
 {
     if (s < 0 || s >= g_in.slots) return;
+    SDL_Log("Game controller closed: %s", g_in.pads[s].name);
     if (g_in.pads[s].ctrl) SDL_GameControllerClose(g_in.pads[s].ctrl);
     if (s + 1 < g_in.slots) {
         memmove(&g_in.pads[s], &g_in.pads[s + 1],
