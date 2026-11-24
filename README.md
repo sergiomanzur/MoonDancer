@@ -1,6 +1,6 @@
 # Moon Dancer
 
-**v0.9.0b** — a from-scratch, native Windows/Linux/macOS/Android runtime for
+**v0.9.1b** — a from-scratch, native Windows/Linux/macOS/Android runtime for
 **Michael Jackson's Moonwalker** (Sega System 18, 1990), built from the user's
 own `mwalk.zip` ROM set. It is not a MAME front end: the board's 68000, memory
 mapper, video hardware, I/O chip and sound board are implemented in portable
@@ -33,6 +33,35 @@ mwalk.exe  ->  System 18 machine model
    your `mwalk.zip`, press **START GAME**.
 4. In game: `5` inserts a coin, `1` starts; full layout under
    [Controls](#controls).
+
+## What's new in 0.9.1b
+
+**Moon Dancer is now on Android** — the full launcher + game in one app, with
+the same settings, cheats and controller panels as the desktop build:
+
+- **On-screen touch controls** with icons that show exactly what they do
+  (fist = punch, rising figure = jump, sparkles = magic, coin slot, 1P
+  START) — switchable between a **D-pad** and a **floating joystick** in
+  SETTINGS, hideable from the launcher or the in-game overlay (a corner
+  MENU button and the Android Back key always get you back in).
+- **ROM import via the Android system file picker**; a private build
+  script (`package_android_private.ps1`) can bake your own `mwalk.zip`
+  into a personal APK that is never to be published.
+- **Full gamepad support** — including the handheld's built-in controls.
+- **Fixed on every platform: NVRAM never actually loaded.** The saved image
+  was restored *before* the CPU reset cleared work RAM, so every launch
+  silently started clean. Credits/bookkeeping now persist across restarts
+  and force-stops, verified byte-for-byte against the MAME oracle. (High
+  scores are volatile by the game's own design — MAME resets them
+  identically.)
+- **Gamepad menu navigation** across the launcher and every in-game panel,
+  including D-pad/stick-adjustable volume and scanline sliders — no mouse
+  needed anywhere.
+- **In-UI archive browser** (controller and touch navigable) as the
+  non-Windows picker; Windows keeps its native dialog.
+- **Performance**: the Android native core builds optimized (`-O3`) and
+  paces at the board's native 57.23 Hz with ~70% frame headroom on a
+  Retroid Pocket 6.
 
 ## What's new in 0.9.0b
 
