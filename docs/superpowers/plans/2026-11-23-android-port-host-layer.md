@@ -30,7 +30,7 @@ Failure modes the spec implies but task tests don't fully exercise; each pinned 
 3. **Old `settings.ini` without `touch_on`/`touch_mode` keys** loads defaults — Task 6's old-file harness assertion (same pattern as 0.9.0b fields).
 4. **Floating joystick ghost diagonals** — a finger resting at the stick edge must not register UP+RIGHT simultaneously; Task 6's mapping harness asserts the dead-zone: offset `< 0.18` of the stick radius yields zero direction bits.
 5. **In-process re-entry leak** — QUIT GAME → START GAME again in one process must re-open audio/pads cleanly; Task 8's device steps run the game twice in one activity session.
-6. **NVRAM silently not written on Android** — Task 9 asserts a score survives an app restart (`adb shell am force-stop` + relaunch).
+6. **NVRAM on Android** — Task 9 proved the file persists and loads byte-level (`workram[0x2000]` verified on disk after force-stop). Credits are volatile **by the game's own design** (the board resets them on power cycle) — the plumbing requirement is "file survives force-stop and is loaded", which passes. High scores are the open question and move to Task 10: run a real scored game-over, relaunch, and compare against MAME with/without its `.nv` — the port emulates no serial EEPROM (the likely validity source), so the investigation decides between EEPROM emulation and documenting faithful behavior.
 
 ---
 
