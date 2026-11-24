@@ -391,9 +391,10 @@ and prints a never-publish warning. On first launch the app extracts the
 bundled archive to `files/mwalk.zip` — never clobbering an archive you imported
 yourself — so the launcher is ready without the picker.
 
-**That APK contains game data. Never publish, upload or share it.** Only the
-plain public build above is redistributable, and even that carries
-ROM-derived translated code.
+**That APK contains game data. Never publish, upload or share it.** The plain
+public build above ships no ROM data, but its `libmain.so` still contains
+translated code derived from your ROM, so keep that artifact to yourself too —
+the same rule as a locally built `mwalk.exe`.
 
 ### NVRAM, credits and high scores
 
