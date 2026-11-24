@@ -31,8 +31,12 @@ void mw_ui_destroy(mw_ui *ui);
  * and the affected rows disappear.  Desktop hosts pass 0 (panels unchanged).
  * MW_UI_CAP_NO_RESOLUTION hides the SETTINGS panel's window-size presets:
  * window geometry is meaningless on a phone screen.  FULLSCREEN stays (SDL
- * maps it to Android immersive mode through the normal fullscreen path). */
+ * maps it to Android immersive mode through the normal fullscreen path).
+ * MW_UI_CAP_TOUCH_HUD marks a host that draws the on-screen touch layer: its
+ * always-on MENU button occupies the top-right corner, so the FPS readout
+ * moves below it instead of rendering underneath it. */
 #define MW_UI_CAP_NO_RESOLUTION 1
+#define MW_UI_CAP_TOUCH_HUD     2
 void mw_ui_set_caps(mw_ui *ui, int caps);
 
 void mw_ui_begin(mw_ui *ui);

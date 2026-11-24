@@ -2193,6 +2193,11 @@ extern "C" void mw_ui_draw_fps(mw_ui *ui, float fps)
     ImVec2 ts = text_size(ui->font_small, sz, buf);
     float x = io.DisplaySize.x - ts.x - 34 * s;
     float y = 18 * s;
+    /* A touch HUD's MENU button is drawn in the same corner (and on the
+     * background list, i.e. after this call): park the readout just below it so
+     * both stay legible. */
+    if (ui->caps & MW_UI_CAP_TOUCH_HUD)
+        y = MW_TOUCH_MENU_Y1 * io.DisplaySize.y + 6 * s;
     dl->AddRectFilled(ImVec2(x - 12 * s, y - 4 * s), ImVec2(x + ts.x + 12 * s, y + ts.y + 4 * s),
                       IM_COL32(2, 4, 10, 150), 8 * s);
     dl->AddCircleFilled(ImVec2(x - 18 * s, y + ts.y * 0.5f), 3.5f * s, A(C_CYAN, 220));

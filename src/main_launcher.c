@@ -48,6 +48,21 @@ static const char *archive_status(const char *path)
     return "NOT FOUND // CHECK THE ARCHIVE PATH";
 }
 
+/* The status line carries two independent facts, so a failed APK-asset
+ * extraction is appended to the archive state instead of replacing it:
+ * "is there a ROM to start" is what START GAME acts on, and "the UI is missing
+ * its fonts" is what explains a fallback-font launcher.  Desktop always
+ * extracts successfully (nothing to copy), so only Android can see the tail.
+ * The buffer is static because the caller only reads the pointer this frame. */
+static const char *launcher_status(const char *archive, int assets_ok)
+{
+    static char buf[160];
+    const char *s = archive_status(archive);
+    if (assets_ok) return s;
+    snprintf(buf, sizeof(buf), "%s // ASSET EXTRACTION FAILED", s);
+    return buf;
+}
+
 static void find_default_zip(const char *base, char *out, int cap)
 {
     out[0] = 0;
@@ -181,9 +196,11 @@ int main(int argc, char **argv)
     }
     /* The renderer scale hint lives in create_surface(): the game leaves
      * "nearest" behind, so each launcher surface sets its own. */
-    /* Android: one-time copy of the APK's fonts/background into the files
-     * dir; no-op on desktop, where those files sit beside the executable. */
-    mw_host_extract_assets();
+    /* Android: copy the APK's fonts/background into the files dir (no-op on
+     * desktop, where those files sit beside the executable).  The result is
+     * surfaced on the launcher's status line: a silent failure would leave the
+     * player looking at a fallback-font UI with no explanation. */
+    int assets_ok = mw_host_extract_assets();
 
     char base[2048];
     if (!mw_host_base_dir(base, (int)sizeof(base))) {
@@ -222,8 +239,9 @@ int main(int argc, char **argv)
     int music_playing = 0;
     Uint32 last_save = 0;
     /* The in-UI archive browser: the fallback for hosts whose native picker
-     * declines (Linux/SteamOS, Android).  It persists across frames because it
-     * owns its own folder and pending selection. */
+     * declines (Linux/SteamOS, and Android when the SAF bridge is
+     * unreachable).  It persists across frames because it owns its own folder
+     * and pending selection. */
     mw_file_browser fb;
     memset(&fb, 0, sizeof(fb));
 
@@ -284,7 +302,7 @@ int main(int argc, char **argv)
              * the gamepad nav focus can land on a button behind the browser. */
             mw_ui_file_browser(ui, &fb, base);
         } else if (!settings_open) {
-            mw_ui_draw_launcher(ui, &settings, archive, archive_status(archive),
+            mw_ui_draw_launcher(ui, &settings, archive, launcher_status(archive, assets_ok),
                                 &browse, &start, &open_settings, &quit, &changed);
         }
         if (settings_open && !fb.active) {
@@ -327,8 +345,11 @@ int main(int argc, char **argv)
             char before[2048];
             snprintf(before, sizeof(before), "%s", archive);
             if (!mw_host_browse_archive(window, archive, (int)sizeof(archive))) {
-                /* This host has no native picker (Linux/SteamOS, Android): the
-                 * in-UI browser opens at the launcher's own folder. */
+                /* No native picker on this host (Linux/SteamOS, or Android
+                 * without a reachable SAF bridge): the in-UI browser opens at
+                 * the launcher's own folder.  Android's normal path returns 1
+                 * and delivers the imported files/mwalk.zip as an SDL_DROPFILE
+                 * event, handled above. */
                 fb.active = 1;
                 fb.done = 0;
                 fb.selection[0] = 0;

@@ -27,6 +27,8 @@
 #endif
 
 #ifdef __ANDROID__
+#include "host_android.h"
+
 /* Android has no writable install tree: SDL_GetBasePath() is unsupported
  * there (it returns NULL), and the APK's assets/ are read-only.  Both the
  * asset dir and the writable data dir are the app's internal files directory;
@@ -160,12 +162,44 @@ static int copy_asset(const char *src, const char *dst)
     return ok;
 }
 
+/* Version stamp written into the extraction marker.  Bump it whenever the
+ * payload list above changes (a new font, a replaced background): an install
+ * whose marker holds a different stamp re-extracts on the next launch, which
+ * is how an updated APK populates files on a device that already has data.
+ * The stamp is only written after a clean pass, so a failed copy is retried
+ * on every launch too. */
+static const char k_assets_version[] = "1";
+
+/* Is the marker present and stamped with the current payload version?
+ * Whitespace is ignored so a hand-edited or older file cannot wedge the
+ * upgrade path (Task 8 wrote a bare "1"). */
+static int marker_matches(const char *path)
+{
+    char buf[64];
+    size_t n, len;
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    len = strlen(buf);
+    while (len && (buf[len - 1] == '\n' || buf[len - 1] == '\r' ||
+                   buf[len - 1] == ' ' || buf[len - 1] == '\t'))
+        buf[--len] = '\0';
+    return strcmp(buf, k_assets_version) == 0;
+}
+
 /* First run: copy the APK's assets/ payload into the files directory.  A
- * marker file in that directory skips the copy on later runs (delete it, or
- * the app's data, to force a re-extract).  assets/mwalk.zip is only present
- * in private builds; when it is there it is unpacked to files/mwalk.zip,
- * which is exactly where the launcher's find_default_zip() looks. */
-void mw_host_extract_assets(void)
+ * version-stamped marker file in that directory skips the copy on later runs
+ * (delete it, or the app's data, to force a re-extract).  assets/mwalk.zip is
+ * only present in private builds; when it is there it is unpacked to
+ * files/mwalk.zip, which is exactly where the launcher's find_default_zip()
+ * looks.
+ *
+ * Returns 1 when the payload is in place and 0 when something could not be
+ * copied: the launcher surfaces 0 on its status line (a silent failure used to
+ * leave the UI on the fallback font with no way for the player to tell). */
+int mw_host_extract_assets(void)
 {
     char base[2048], dst[3072], path[3072];
     char marker[3072];
@@ -173,9 +207,15 @@ void mw_host_extract_assets(void)
     FILE *m;
     int ok = 1;
 
-    if (!mw_host_base_dir(base, (int)sizeof(base))) return;
+    if (!mw_host_base_dir(base, (int)sizeof(base))) {
+        SDL_Log("Asset extraction: no writable files directory");
+        return 0;
+    }
     snprintf(marker, sizeof(marker), "%sassets/.extracted", base);
-    if (file_exists(marker)) return;
+    if (marker_matches(marker)) return 1;
+
+    SDL_Log("Asset extraction: populating %sassets (stamp v%s)",
+            base, k_assets_version);
 
     snprintf(path, sizeof(path), "%sassets", base);
     (void)mkdir(path, 0755);
@@ -186,6 +226,7 @@ void mw_host_extract_assets(void)
         snprintf(dst, sizeof(dst), "%sassets/%s", base, k_apk_assets[i]);
         if (!copy_asset(k_apk_assets[i], dst)) {
             fprintf(stderr, "Could not extract APK asset %s\n", k_apk_assets[i]);
+            SDL_Log("Asset extraction: could not copy %s", k_apk_assets[i]);
             ok = 0;
         }
     }
@@ -199,6 +240,7 @@ void mw_host_extract_assets(void)
             snprintf(dst, sizeof(dst), "%smwalk.zip", base);
             if (!file_exists(dst) && !copy_asset("mwalk.zip", dst)) {
                 fprintf(stderr, "Could not extract the bundled mwalk.zip\n");
+                SDL_Log("Asset extraction: could not copy the bundled mwalk.zip");
                 ok = 0;
             }
         }
@@ -206,18 +248,25 @@ void mw_host_extract_assets(void)
 
     /* No marker on a partial copy: the next launch retries instead of leaving
      * the UI permanently on the fallback font. */
-    if (!ok) return;
+    if (!ok) {
+        SDL_Log("Asset extraction incomplete; retrying on the next launch");
+        return 0;
+    }
     m = fopen(marker, "wb");
     if (m) {
-        fputs("1\n", m);
+        fputs(k_assets_version, m);
+        fputc('\n', m);
         fclose(m);
     }
+    SDL_Log("Asset extraction complete");
+    return 1;
 }
 #else
 /* No APK asset bundle to unpack on desktop hosts: fonts and the background are
- * already files next to the executable. */
-void mw_host_extract_assets(void)
+ * already files next to the executable, so there is nothing that can fail. */
+int mw_host_extract_assets(void)
 {
+    return 1;
 }
 #endif
 
@@ -225,7 +274,9 @@ void mw_host_extract_assets(void)
  * handled, not whether a file was picked: 1 = a native picker was shown (out is
  * filled on success and left untouched on cancel); 0 = this host has no native
  * picker, so the launcher opens its in-UI browser.  Windows always handles the
- * flow, which is what keeps it native-only (a cancelled dialog does nothing). */
+ * flow, which is what keeps it native-only (a cancelled dialog does nothing).
+ * Android always handles it too, but with no path yet: the SAF picker runs in
+ * the activity and the copied archive arrives later as an SDL_DROPFILE event. */
 int mw_host_browse_archive(SDL_Window *window, char *out, int cap)
 {
 #ifdef _WIN32
@@ -253,6 +304,18 @@ int mw_host_browse_archive(SDL_Window *window, char *out, int cap)
             memcpy(out, converted, (size_t)n);
     }
     return 1;
+#elif defined(__ANDROID__)
+    (void)window;
+    (void)out;
+    (void)cap;
+    /* The picker lives in the activity (SAF), so out is deliberately untouched:
+     * the launcher must not treat the archive as chosen until the DROPFILE for
+     * the copied files/mwalk.zip arrives. */
+    if (mw_android_open_rom_picker()) return 1;
+    /* No JNI bridge / no activity: fall back to the in-UI browser so BROWSE
+     * still does something on a device whose picker cannot be reached. */
+    SDL_Log("Browse: SAF picker unavailable, opening the in-UI browser");
+    return 0;
 #else
     (void)window;
     (void)out;

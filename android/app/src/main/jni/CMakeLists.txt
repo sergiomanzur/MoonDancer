@@ -24,6 +24,17 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# Native optimization is separate from APK debuggability.  app/build.gradle
+# pins -DCMAKE_BUILD_TYPE=Release for that reason; this guard is the safety net
+# for a direct NDK configure (the documented -DSDL2_SOURCE=<path> escape hatch),
+# where a Debug build type would otherwise produce an -O0 emulator core that
+# cannot hold 60 fps on ARM.  add_compile_options() appends after the toolchain
+# flags, so -O3 wins over the toolchain's -O0.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    message(STATUS "Debug build type: forcing -O3 for the emulator core")
+    add_compile_options(-O3)
+endif()
+
 get_filename_component(MW_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../.." ABSOLUTE)
 # CACHE so the FATAL_ERROR hint below actually works: a plain set() would
 # shadow any -DSDL2_SOURCE=<path> passed on the configure command line.
@@ -132,11 +143,17 @@ add_library(main SHARED
     "${MW_ROOT}/src/host_port.c"
     "${MW_ROOT}/src/launcher_music.c"
     "${MW_ROOT}/src/zip_loader.c"
+    # JNI bridge: SAF ROM picker (JNI_OnLoad + nativeRomImported).  Lives here
+    # rather than in src/ because it is Android-only and needs <jni.h>.
+    "${CMAKE_CURRENT_SOURCE_DIR}/jni_bridge.c"
     "${MW_ROOT}/third_party/miniz/miniz.c"
     "${MW_ROOT}/third_party/miniz/miniz_tdef.c"
     "${MW_ROOT}/third_party/miniz/miniz_tinfl.c"
     "${MW_ROOT}/third_party/miniz/miniz_zip.c"
 )
-target_include_directories(main PRIVATE "${MW_ROOT}/third_party/miniz")
+target_include_directories(main PRIVATE
+    "${MW_ROOT}/src"
+    "${MW_ROOT}/third_party/miniz"
+)
 target_link_libraries(main PRIVATE mwsystem18 mwui SDL2::SDL2)
 set_target_properties(main PROPERTIES LINKER_LANGUAGE CXX)

@@ -43,6 +43,12 @@
 #define GAME_SDL_QUIT() SDL_Quit()
 #endif
 
+/* Android only: how often the workram image is flushed to nvram/... while the
+ * game runs.  A force-stop or a low-memory reclaim kills the process without
+ * reaching the save at the bottom of mw_game_main, so the image would be as
+ * old as the last clean exit. */
+#define MW_NVRAM_FLUSH_MS 2000
+
 static uint8_t key_state[SDL_NUM_SCANCODES];
 static uint8_t key_latch[SDL_NUM_SCANCODES];
 static mw_input_result g_input; /* keyboard + 3 pads, refreshed every frame */
@@ -536,15 +542,9 @@ int mw_game_main(int argc, char **argv)
         fprintf(stderr, "Could not initialize the settings overlay.\n");
         return 1;
     }
-#ifdef __ANDROID__
-    /* The game window is the Android activity surface: window-size presets
-     * are meaningless here (the plan's capability-flag contract).  The
-     * launcher sets the same cap on its own mw_ui instance. */
-    mw_ui_set_caps(ui, MW_UI_CAP_NO_RESOLUTION);
-#else
-    /* Desktop host: every panel row applies, no capability flags are set. */
-    mw_ui_set_caps(ui, 0);
-#endif
+    /* The overlay's capability flags are set below, once the touch capability
+     * is known: both the phone surface (no window-size presets) and the
+     * touch HUD's corner (FPS readout placement) feed the same call. */
 
     g_sdl_audio = audio;
     audio_apply(audio_on);
@@ -561,6 +561,10 @@ int mw_game_main(int argc, char **argv)
     int applied_touch_on = -1;   /* -1 forces the first mw_touch_set() */
     int applied_touch_mode = -1;
     Uint32 last_save = 0;
+#ifdef __ANDROID__
+    /* Periodic NVRAM flush clock; see the save site below. */
+    Uint32 last_nvram_save = SDL_GetTicks();
+#endif
     double fps = 60.0;
     Uint64 fps_last = SDL_GetPerformanceCounter();
     uint64_t last = SDL_GetPerformanceCounter();
@@ -581,6 +585,20 @@ int mw_game_main(int argc, char **argv)
         const char *force = SDL_getenv("MW_TOUCH_FORCE");
         if (force && force[0] && strcmp(force, "0") != 0)
             touch_capable = 1;
+    }
+    /* One place decides the overlay's capability flags.  Android's game window
+     * is the activity surface, so the window-size presets are meaningless (the
+     * plan's capability-flag contract; the launcher sets the same cap on its
+     * own mw_ui instance).  A touch-capable host draws the always-on MENU
+     * button in the top-right corner, exactly where the FPS readout sits, so
+     * the readout has to move out from under it. */
+    {
+        int caps = 0;
+#ifdef __ANDROID__
+        caps |= MW_UI_CAP_NO_RESOLUTION;
+#endif
+        if (touch_capable) caps |= MW_UI_CAP_TOUCH_HUD;
+        mw_ui_set_caps(ui, caps);
     }
     /* Landing point of the floating stick's owning thumb (normalized window
      * coordinates).  The touch module anchors at the finger but its frozen
@@ -861,6 +879,23 @@ int mw_game_main(int argc, char **argv)
             settings_dirty = 0;
             last_save = SDL_GetTicks();
         }
+#ifdef __ANDROID__
+        /* Android never reaches the save at the bottom of this function on a
+         * force-stop or a low-memory reclaim: the process is killed.  The real
+         * board's NVRAM is battery-backed, so flush the workram image
+         * periodically while the machine runs; a kill then loses at most this
+         * window.  Verified on device: the image on disk carries the live
+         * credit counter (workram 0x2000) within one window of inserting coins.
+         * What a relaunch restores is up to the game -- Moonwalker
+         * re-initializes its credit counter and high-score table at boot, so an
+         * image alone does not bring those back.  Desktop keeps its shipped
+         * save-on-exit behavior. */
+        if (!paused && !settings_open &&
+            SDL_GetTicks() - last_nvram_save >= MW_NVRAM_FLUSH_MS) {
+            s18_save_nvram(&machine, nvram);
+            last_nvram_save = SDL_GetTicks();
+        }
+#endif
         if (g_settings.fullscreen != applied_fullscreen) {
             apply_fullscreen(window, g_settings.fullscreen);
             applied_fullscreen = g_settings.fullscreen;
